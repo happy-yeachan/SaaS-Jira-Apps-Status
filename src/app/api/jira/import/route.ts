@@ -202,9 +202,6 @@ export async function POST(request: Request) {
 
       connectLastStatus = res.status;
       const rawText = await res.text();
-      console.log(
-        `[connect] ${endpoint} → HTTP ${res.status} | body(500)=${rawText.slice(0, 500)}`,
-      );
 
       if (res.status === 403 || res.status === 401) {
         connectApiBlocked = true;
@@ -216,7 +213,6 @@ export async function POST(request: Request) {
       try { parsed = JSON.parse(rawText); } catch { continue; }
 
       const addons = parseConnectAddons(parsed);
-      console.log(`[connect] parsed ${addons.length} addons from ${endpoint}`);
 
       for (const addon of addons) {
         if (!addon.key || !addon.name) continue;
@@ -241,15 +237,6 @@ export async function POST(request: Request) {
 
   console.log(`[jira/import] Connect add-ons merged: ${connectTotal} (total combined: ${allPlugins.length})`);
 
-  // ── Debug: dump every plugin before filtering ────────────────────────────
-  console.log(`[jira/import] --- RAW UPM DUMP (${allPlugins.length} plugins) ---`);
-  allPlugins.forEach((p) => {
-    console.log(
-      `  [upm] "${p.name ?? ""}" | key="${p.key ?? ""}" | vendor="${p.vendor?.name ?? ""}" | userInstalled=${String(p.userInstalled)}`,
-    );
-  });
-  console.log(`[jira/import] --- END RAW DUMP ---`);
-
   // ── Inclusion criteria ────────────────────────────────────────────────────
   // The UPM API (with Accept: application/vnd.atl.plugins.installed+json) marks
   // every plugin the admin explicitly installed from the Marketplace with
@@ -262,14 +249,7 @@ export async function POST(request: Request) {
     },
   );
 
-  console.log(
-    `[jira/import] after filter: ${userPlugins.length} / ${allPlugins.length} kept`,
-  );
-  userPlugins.forEach((p) => {
-    console.log(
-      `  [kept] "${p.name}" | key="${p.key}" | userInstalled=${String(p.userInstalled)}`,
-    );
-  });
+  console.log(`[jira/import] after filter: ${userPlugins.length} / ${allPlugins.length} kept`);
 
   // ── Per-plugin resolver (logo + status) ─────────────────────────────────
   // Each plugin needs two things resolved asynchronously:
@@ -385,11 +365,6 @@ export async function POST(request: Request) {
       };
       finalStatusUrl = result.statusUrl ? result.statusUrl : null;
       statusSource = result.statusSource;
-      console.log(
-        `[MAP CHECK] App: ${appName} | Vendor: ${rawVendor} | URL: ${
-          result.statusUrl || "none"
-        } | source: ${result.statusSource} | marketplace: ${String(result.onMarketplace)}`,
-      );
       return result;
     };
 
@@ -399,11 +374,6 @@ export async function POST(request: Request) {
     // Forge / Ecosystem serverless: ARI or URN app keys — shared infra status
     if (isForgeServerlessKey(plugin.key)) {
       const { logoUrl } = await resolvePluginLogo(plugin);
-      console.log(
-        `[import:forge] "${appName}" | key starts with ${JSON.stringify(
-          plugin.key.slice(0, 48),
-        )}… → ${FORGE_DEVELOPER_STATUS_URL}`,
-      );
       return logMapCheck({
         logoUrl,
         statusUrl: FORGE_DEVELOPER_STATUS_URL,
@@ -413,25 +383,6 @@ export async function POST(request: Request) {
     }
 
     const normalizedKey = normalizeVendorName(rawVendor);
-    const mappedValue = Object.prototype.hasOwnProperty.call(
-      KNOWN_VENDOR_MAP,
-      normalizedKey,
-    )
-      ? KNOWN_VENDOR_MAP[normalizedKey]
-      : undefined;
-
-    const assignedPreview =
-      !Object.prototype.hasOwnProperty.call(KNOWN_VENDOR_MAP, normalizedKey)
-        ? "None (Fallback to resolveStatusUrl or Auto-Discovery)"
-        : mappedValue === null
-          ? "NONE (blacklisted – no public status page)"
-          : String(mappedValue);
-
-    console.log("--- [DEBUG IMPORT] ---");
-    console.log(`App Name: "${appName}"`);
-    console.log(`Original Vendor: "${rawVendor}"`);
-    console.log(`Normalized Key: "${normalizedKey}"`);
-    console.log(`Assigned URL: ${assignedPreview}`);
 
     // ── Priority 1: KNOWN_VENDOR_MAP (lowercase keys) ─────────────────────
     if (normalizedKey in KNOWN_VENDOR_MAP) {
@@ -448,9 +399,6 @@ export async function POST(request: Request) {
       }
       // Do not map these product lines to Tempo (bad UPM vendor strings)
       if (isTempoStatusUrl(entry) && isTempoBlockedByAppName(appName)) {
-        console.log(
-          `[import] Skipping KNOWN Tempo URL for app="${appName}" (flexible/osci guard)`,
-        );
         precachedLogoRes = logoRes;
         // fall through to priority 2/3
       } else {

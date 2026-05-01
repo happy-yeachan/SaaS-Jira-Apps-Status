@@ -267,27 +267,20 @@ function extractStatuspageStatus(
 
   const fuzzy = findFuzzyNameComponent(appName, components);
   if (fuzzy?.rawStatus) {
-    const status = normalizeComponentStatus(fuzzy.rawStatus);
-    console.log(
-      `[component-fuzzy] "${appName}" → "${fuzzy.name}" (${fuzzy.rawStatus}) → ${status}`,
-    );
     return {
-      status,
+      status: normalizeComponentStatus(fuzzy.rawStatus),
       message: `${fuzzy.name}: ${fuzzy.rawStatus.replace(/_/g, " ")}`,
     };
   }
 
   const best = findBestComponent(appName, components);
   if (best?.rawStatus) {
-    const status = normalizeComponentStatus(best.rawStatus);
-    console.log(`[component-match] "${appName}" → "${best.name}" (${best.rawStatus}) → ${status}`);
     return {
-      status,
+      status: normalizeComponentStatus(best.rawStatus),
       message: `${best.name}: ${best.rawStatus.replace(/_/g, " ")}`,
     };
   }
 
-  console.log(`[component-match] "${appName}" → no component match (${components.length} components); using global: ${globalStatus}`);
   return { status: globalStatus, message: globalMessage };
 }
 
@@ -345,10 +338,6 @@ function extractAnyStatus(
   const statusObj = p.status as Record<string, unknown> | undefined;
   const pageObj   = p.page   as Record<string, unknown> | undefined;
 
-  console.log(
-    `[parse] "${appName}" | keys=[${Object.keys(p).join(", ")}] | status.indicator=${statusObj?.indicator ?? "—"} | page.status=${pageObj?.status ?? "—"}`,
-  );
-
   // 1. Atlassian Statuspage — has status.indicator
   if (statusObj?.indicator !== undefined) {
     return extractStatuspageStatus(appName, payload as StatuspageSummary);
@@ -399,12 +388,12 @@ function extractAnyStatus(
     }
 
     if (matched) {
-      const compStatus = normalizeJsonApiState(matched.status.toLowerCase());
-      console.log(`[parse] "${appName}" → index.json component "${matched.name}" (${matched.status}) → ${compStatus}`);
-      return { status: compStatus, message: `${matched.name}: ${matched.status}` };
+      return {
+        status: normalizeJsonApiState(matched.status.toLowerCase()),
+        message: `${matched.name}: ${matched.status}`,
+      };
     }
 
-    console.log(`[parse] "${appName}" → index.json aggregate_state="${aggregateRaw}" → ${globalStatus}`);
     return { status: globalStatus, message: aggregateRaw || "index.json status" };
   }
 
@@ -417,21 +406,17 @@ function extractAnyStatus(
         : description.includes("degraded") || description.includes("minor")
         ? "degraded"
         : "outage";
-    console.log(`[parse] "${appName}" → description fallback: "${description}" → ${status}`);
     return { status, message: description };
   }
 
   // 5. Raw string scan — last resort to avoid false "Outage" when service is fine.
-  //    If the entire JSON payload says "operational" with no outage/degraded mentions,
-  //    trust it rather than defaulting to degraded.
   const raw = JSON.stringify(p).toLowerCase();
   if (raw.includes("operational") && !raw.includes("outage") && !raw.includes("degraded")) {
-    console.log(`[parse] "${appName}" → raw-scan fallback: payload looks operational`);
     return { status: "operational", message: "All systems operational (raw scan)" };
   }
 
-  // 6. Truly unrecognisable — log for future diagnosis
-  console.warn(`[parse] "${appName}" → unrecognised payload shape, defaulting to degraded`);
+  // 6. Truly unrecognisable
+  console.warn(`[status] Unrecognised payload shape for "${appName}"`);
   return { status: "degraded", message: "Unrecognised status page format" };
 }
 
@@ -462,10 +447,6 @@ async function checkAppHealth(app: RegisteredApp): Promise<HealthCheckResult> {
       ? app.statusUrl.replace(/\/api\/v2\/status\.json$/, "/api/v2/summary.json")
       : app.statusUrl;
 
-    const urlType = isStatuspage
-      ? fetchUrl.endsWith("summary.json") ? "statuspage/summary" : "statuspage/status"
-      : "instatus";
-    console.log(`[FETCH INIT] "${app.appName}" | format=${urlType} | url=${fetchUrl}`);
 
     const response = await fetch(fetchUrl, {
       method: "GET",
@@ -528,7 +509,6 @@ async function checkAppHealth(app: RegisteredApp): Promise<HealthCheckResult> {
       }
 
       const payload = (await response.json()) as unknown;
-      console.log(`[FETCH SUCCESS] "${app.appName}" | top-level keys: [${Object.keys(payload as object).join(", ")}]`);
 
       // extractAnyStatus auto-detects Statuspage / Instatus / description-only
       // from the payload shape — no URL heuristic needed.

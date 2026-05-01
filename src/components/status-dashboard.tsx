@@ -34,6 +34,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { resolveStatusUrl } from "@/types";
 import type {
   AppHealthStatus,
@@ -45,6 +52,7 @@ import type {
 
 const APPS_KEY = "jira-marketplace-apps";
 const HISTORY_KEY = "jira-marketplace-history";
+const REFRESH_KEY = "jira-refresh-interval";
 const HISTORY_MAX = 30;
 const BAR_COUNT = 30;
 
@@ -124,7 +132,21 @@ function HeartbeatBars({ history }: { history: PingRecord[] }) {
 
 // ── Status indicator cell ──────────────────────────────────────────────────────
 
-function StatusCell({ result }: { result: HealthCheckResult | undefined }) {
+function StatusCell({
+  result,
+  isUnconfigured,
+}: {
+  result: HealthCheckResult | undefined;
+  isUnconfigured?: boolean;
+}) {
+  if (isUnconfigured) {
+    return (
+      <div className="flex items-center gap-1.5 text-muted-foreground/50">
+        <CircleDashed className="h-4 w-4" />
+        <span className="text-xs">No status page</span>
+      </div>
+    );
+  }
   if (!result) {
     return (
       <div className="flex items-center gap-1.5 text-muted-foreground">
@@ -280,6 +302,12 @@ export function StatusDashboard() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [jiraImportOpen, setJiraImportOpen] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const raw = localStorage.getItem(REFRESH_KEY);
+    const n = Number(raw);
+    return [60, 300, 1800].includes(n) ? n : null;
+  });
 
   // Use a ref so async callbacks always read the latest apps value
   const appsRef = useRef(apps);
@@ -297,6 +325,14 @@ export function StatusDashboard() {
   useEffect(() => {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(historyById));
   }, [historyById]);
+
+  useEffect(() => {
+    if (refreshInterval === null) {
+      localStorage.removeItem(REFRESH_KEY);
+    } else {
+      localStorage.setItem(REFRESH_KEY, String(refreshInterval));
+    }
+  }, [refreshInterval]);
 
   // ── Health checks ──────────────────────────────────────────────────────────
   const applyResults = (results: HealthCheckResult[]) => {
@@ -321,22 +357,23 @@ export function StatusDashboard() {
 
   const checkAllStatuses = async () => {
     const appsList = appsRef.current;
-    if (appsList.length === 0) return;
+    const checkableApps = appsList.filter((a) => a.statusUrl);
+    if (checkableApps.length === 0) return;
     setIsChecking(true);
     try {
       const res = await fetch("/api/status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apps: appsList }),
+        body: JSON.stringify({ apps: checkableApps }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as HealthCheckResponse;
       applyResults(data.results);
     } catch {
-      // Mark unchecked apps as outage so the table reflects the failure
+      // Mark checkable apps as outage so the table reflects the failure
       setLatestById((prev) => {
         const next = { ...prev };
-        for (const app of appsRef.current) {
+        for (const app of checkableApps) {
           if (!next[app.id]) {
             next[app.id] = {
               appId: app.id,
@@ -386,6 +423,14 @@ export function StatusDashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (isMounted) void checkAllStatuses(); }, [isMounted]);
 
+  // Auto-refresh — restarts whenever interval changes; cleans up on unmount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!isMounted || !refreshInterval) return;
+    const id = setInterval(() => void checkAllStatuses(), refreshInterval * 1000);
+    return () => clearInterval(id);
+  }, [isMounted, refreshInterval]);
+
   // ── Sort ───────────────────────────────────────────────────────────────────
   const handleSort = (key: SortKey) => {
     setSortDir((prev) => (sortKey === key ? (prev === "asc" ? "desc" : "asc") : "asc"));
@@ -395,17 +440,19 @@ export function StatusDashboard() {
   // ── App CRUD ───────────────────────────────────────────────────────────────
   const handleAddApp = (app: RegisteredApp) => {
     setApps((prev) => [app, ...prev]);
-    // Trigger an immediate single-app check for instant feedback
-    void fetch("/api/status", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apps: [app] }),
-    })
-      .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
-      .then((data) => {
-        if (data?.results?.[0]) applyResults(data.results);
+    // Trigger an immediate single-app check for instant feedback (skip if no status URL)
+    if (app.statusUrl) {
+      void fetch("/api/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apps: [app] }),
       })
-      .catch(() => undefined);
+        .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
+        .then((data) => {
+          if (data?.results?.[0]) applyResults(data.results);
+        })
+        .catch(() => undefined);
+    }
   };
 
   // Bulk-add from Jira import — deduplicates and runs a single health-check
@@ -424,15 +471,18 @@ export function StatusDashboard() {
         ? [...brandNew, ...next]
         : prev;
     });
-    // Single batch health-check — always use the latest server URLs (import overwrites)
-    void fetch("/api/status", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apps: newApps }),
-    })
-      .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
-      .then((data) => { if (data?.results) applyResults(data.results); })
-      .catch(() => undefined);
+    // Single batch health-check — skip apps with no status URL
+    const checkableApps = newApps.filter((a) => a.statusUrl);
+    if (checkableApps.length > 0) {
+      void fetch("/api/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apps: checkableApps }),
+      })
+        .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
+        .then((data) => { if (data?.results) applyResults(data.results); })
+        .catch(() => undefined);
+    }
   };
 
   const handleDeleteApp = (appId: string) => {
@@ -525,6 +575,20 @@ export function StatusDashboard() {
             <RefreshCw className={cn("h-3.5 w-3.5", isChecking && "animate-spin")} />
             Refresh
           </Button>
+          <Select
+            value={refreshInterval === null ? "off" : String(refreshInterval)}
+            onValueChange={(v) => setRefreshInterval(v === "off" ? null : Number(v))}
+          >
+            <SelectTrigger className="h-8 w-[112px] text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="off" className="text-xs">Auto: Off</SelectItem>
+              <SelectItem value="60" className="text-xs">Auto: 1 min</SelectItem>
+              <SelectItem value="300" className="text-xs">Auto: 5 min</SelectItem>
+              <SelectItem value="1800" className="text-xs">Auto: 30 min</SelectItem>
+            </SelectContent>
+          </Select>
           <Button
             variant="outline"
             size="sm"
@@ -543,7 +607,7 @@ export function StatusDashboard() {
       {/*
         isMounted guard — everything below reads from localStorage-backed state.
         Rendering it before mount would produce a different output than the SSR
-        HTML (which sees DEFAULT_APPS), causing a hydration mismatch.
+        HTML, causing a hydration mismatch.
         The skeleton is pure static markup that matches the server render exactly.
       */}
       {!isMounted ? (
@@ -712,7 +776,7 @@ export function StatusDashboard() {
 
                         {/* Status */}
                         <TableCell>
-                          <StatusCell result={result} />
+                          <StatusCell result={result} isUnconfigured={!app.statusUrl} />
                         </TableCell>
 
                         {/* Heartbeat bars */}
