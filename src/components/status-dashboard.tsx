@@ -9,7 +9,6 @@ import {
   ChevronUp,
   ChevronsUpDown,
   CircleDashed,
-  Download,
   ExternalLink,
   LayoutGrid,
   PlusCircle,
@@ -18,7 +17,6 @@ import {
 } from "lucide-react";
 import { AddAppDialog } from "@/components/add-app-dialog";
 import { AppLogo } from "@/components/app-logo";
-import { JiraImportDialog } from "@/components/jira-import-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,13 +33,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { resolveStatusUrl, VENDOR_BLACKLIST } from "@/types";
 import { normalizeVendorName } from "@/lib/status-discovery";
 import type {
@@ -54,8 +45,8 @@ import type {
 
 const APPS_KEY = "jira-marketplace-apps";
 const HISTORY_KEY = "jira-marketplace-history";
-const REFRESH_KEY = "jira-refresh-interval";
 const HISTORY_MAX = 30;
+const AUTO_REFRESH_MS = 5 * 60 * 1000;
 const BAR_COUNT = 30;
 
 const STATUS_PRIORITY: Record<AppHealthStatus, number> = {
@@ -384,13 +375,6 @@ export function StatusDashboard() {
   const [sortKey, setSortKey] = useState<SortKey>("status");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [jiraImportOpen, setJiraImportOpen] = useState(false);
-  const [refreshInterval, setRefreshInterval] = useState<number | null>(() => {
-    if (typeof window === "undefined") return null;
-    const raw = localStorage.getItem(REFRESH_KEY);
-    const n = Number(raw);
-    return [60, 300, 1800].includes(n) ? n : null;
-  });
 
   // Use a ref so async callbacks always read the latest apps value
   const appsRef = useRef(apps);
@@ -408,14 +392,6 @@ export function StatusDashboard() {
   useEffect(() => {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(historyById));
   }, [historyById]);
-
-  useEffect(() => {
-    if (refreshInterval === null) {
-      localStorage.removeItem(REFRESH_KEY);
-    } else {
-      localStorage.setItem(REFRESH_KEY, String(refreshInterval));
-    }
-  }, [refreshInterval]);
 
   // ── Health checks ──────────────────────────────────────────────────────────
   const applyResults = (results: HealthCheckResult[]) => {
@@ -515,13 +491,13 @@ export function StatusDashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (isMounted) void checkAllStatuses(); }, [isMounted]);
 
-  // Auto-refresh — restarts whenever interval changes; cleans up on unmount.
+  // Auto-refresh every 5 minutes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!isMounted || !refreshInterval) return;
-    const id = setInterval(() => void checkAllStatuses(), refreshInterval * 1000);
+    if (!isMounted) return;
+    const id = setInterval(() => void checkAllStatuses(), AUTO_REFRESH_MS);
     return () => clearInterval(id);
-  }, [isMounted, refreshInterval]);
+  }, [isMounted]);
 
   // ── Sort ───────────────────────────────────────────────────────────────────
   const handleSort = (key: SortKey) => {
@@ -543,36 +519,6 @@ export function StatusDashboard() {
         .then((data) => {
           if (data?.results?.[0]) applyResults(data.results);
         })
-        .catch(() => undefined);
-    }
-  };
-
-  // Bulk-add from Jira import — deduplicates and runs a single health-check
-  // batch for all new apps instead of one request per app.
-  const handleBulkAddApps = (newApps: RegisteredApp[]) => {
-    if (newApps.length === 0) return;
-    setApps((prev) => {
-      const incomingById = new Map(newApps.map((a) => [a.id, a]));
-      const next = prev.map((a) => {
-        const upd = incomingById.get(a.id);
-        return upd ? { ...a, ...upd } : a;
-      });
-      const prevIds = new Set(prev.map((a) => a.id));
-      const brandNew = newApps.filter((a) => !prevIds.has(a.id));
-      return brandNew.length > 0 || next.some((a, i) => a !== prev[i])
-        ? [...brandNew, ...next]
-        : prev;
-    });
-    // Single batch health-check — skip apps with no status URL
-    const checkableApps = newApps.filter((a) => a.statusUrl);
-    if (checkableApps.length > 0) {
-      void fetch("/api/status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apps: checkableApps }),
-      })
-        .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
-        .then((data) => { if (data?.results) applyResults(data.results); })
         .catch(() => undefined);
     }
   };
@@ -661,28 +607,6 @@ export function StatusDashboard() {
             <RefreshCw className={cn("h-3.5 w-3.5", isChecking && "animate-spin")} />
             Refresh
           </Button>
-          <Select
-            value={isMounted ? (refreshInterval === null ? "off" : String(refreshInterval)) : "off"}
-            onValueChange={(v) => setRefreshInterval(v === "off" ? null : Number(v))}
-          >
-            <SelectTrigger className="h-8 w-[112px] text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="off" className="text-xs">Auto: Off</SelectItem>
-              <SelectItem value="60" className="text-xs">Auto: 1 min</SelectItem>
-              <SelectItem value="300" className="text-xs">Auto: 5 min</SelectItem>
-              <SelectItem value="1800" className="text-xs">Auto: 30 min</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setJiraImportOpen(true)}
-          >
-            <Download className="h-3.5 w-3.5" />
-            Import from Jira
-          </Button>
           <Button size="sm" onClick={() => setAddDialogOpen(true)}>
             <PlusCircle className="h-3.5 w-3.5" />
             Add App
@@ -754,16 +678,12 @@ export function StatusDashboard() {
               <LayoutGrid className="mb-4 h-12 w-12 text-muted-foreground/40" />
               <h3 className="text-base font-semibold">No apps monitored</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                Add apps from the Atlassian Marketplace or import your installed ones from Jira.
+                Add apps from the Atlassian Marketplace to start monitoring.
               </p>
               <div className="mt-6 flex gap-3">
-                <Button variant="outline" onClick={() => setAddDialogOpen(true)}>
+                <Button onClick={() => setAddDialogOpen(true)}>
                   <PlusCircle className="mr-1.5 h-4 w-4" />
                   Add App
-                </Button>
-                <Button onClick={() => setJiraImportOpen(true)}>
-                  <Download className="mr-1.5 h-4 w-4" />
-                  Import from Jira
                 </Button>
               </div>
             </div>
@@ -880,12 +800,6 @@ export function StatusDashboard() {
             open={addDialogOpen}
             onOpenChange={setAddDialogOpen}
             onAddApp={handleAddApp}
-            existingIds={existingIds}
-          />
-          <JiraImportDialog
-            open={jiraImportOpen}
-            onOpenChange={setJiraImportOpen}
-            onImportApps={handleBulkAddApps}
             existingIds={existingIds}
           />
         </>
