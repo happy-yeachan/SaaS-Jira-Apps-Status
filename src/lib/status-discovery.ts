@@ -116,6 +116,9 @@ export function normalizeVendorName(rawVendor: string): string {
   // ── GitKraken empire ────────────────────────────────────────────────────
   if (l.includes("gitkraken") || l.includes("axosoft")) return "gitkraken";
 
+  // ── Exalate (formerly iDalko, rebranded to iGo Software) ────────────────
+  if (l.includes("idalko") || l.includes("igo software") || l === "exalate") return "exalate";
+
   // ── draw.io (Seibert Media / JGraph) ────────────────────────────────────
   if (l.includes("seibert") || l.includes("jgraph")) return "seibert media";
 

@@ -282,11 +282,27 @@ export async function POST(request: Request) {
   async function resolvePluginLogo(
     plugin: UpmPlugin & { key: string; name: string },
   ): Promise<LogoResolution> {
+    /** Extract a CDN logo URL from a raw marketplace addon payload. */
+    function extractLogoUrl(
+      payload: unknown,
+    ): string | undefined {
+      const data = payload as {
+        _embedded?: { logo?: { image?: string } };
+        _links?: { logo?: { href?: string } };
+      };
+      // Prefer the pre-built CDN URL from _embedded (no reconstruction needed)
+      const direct = data._embedded?.logo?.image;
+      if (direct) return direct;
+      // Fall back to constructing from the asset href
+      const assetId = data._links?.logo?.href?.split("/").pop();
+      return assetId
+        ? `https://marketplace.atlassian.com/product-listing/files/${assetId}?width=72&height=72`
+        : undefined;
+    }
+
     try {
       const mpRes = await fetch(
-        `https://marketplace.atlassian.com/rest/2/addons/${encodeURIComponent(
-          plugin.key,
-        )}`,
+        `https://marketplace.atlassian.com/rest/2/addons/${encodeURIComponent(plugin.key)}`,
         {
           cache: "no-store",
           signal: AbortSignal.timeout(3000),
@@ -294,21 +310,36 @@ export async function POST(request: Request) {
         },
       );
       if (mpRes.ok) {
-        const mpData = (await mpRes.json()) as {
-          _links?: { logo?: { href?: string } };
-        };
-        const assetPath = mpData._links?.logo?.href;
-        if (assetPath) {
-          const assetId = assetPath.split("/").pop();
-          if (assetId) {
-            return {
-              logoUrl: `https://marketplace.atlassian.com/product-listing/files/${assetId}?width=72&height=72`,
-              onMarketplace: true,
-            };
+        const logoUrl = extractLogoUrl(await mpRes.json());
+        return { logoUrl, onMarketplace: true };
+      }
+
+      // Key not found on marketplace (plugin may have been rekeyed, e.g.
+      // com.idalko.exalate → com.exalate.jiranode). Try a name-based search
+      // as fallback and match on exact plugin name.
+      if (mpRes.status === 404) {
+        const searchRes = await fetch(
+          `https://marketplace.atlassian.com/rest/2/addons?text=${encodeURIComponent(plugin.name)}&limit=5`,
+          {
+            cache: "no-store",
+            signal: AbortSignal.timeout(3000),
+            headers: { Accept: "application/json" },
+          },
+        );
+        if (searchRes.ok) {
+          const searchData = (await searchRes.json()) as {
+            _embedded?: { addons?: unknown[] };
+          };
+          const addons = searchData._embedded?.addons ?? [];
+          const nameLower = plugin.name.toLowerCase();
+          const match = addons.find(
+            (a) => (a as { name?: string }).name?.toLowerCase() === nameLower,
+          );
+          if (match) {
+            const logoUrl = extractLogoUrl(match);
+            if (logoUrl) return { logoUrl, onMarketplace: true };
           }
         }
-        // Found in marketplace but no logo asset
-        return { logoUrl: undefined, onMarketplace: true };
       }
     } catch {
       // Marketplace unreachable / timed out — fall through
