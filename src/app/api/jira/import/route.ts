@@ -32,9 +32,8 @@ export const revalidate = 0;
  */
 
 import { NextResponse } from "next/server";
-import { KNOWN_VENDOR_MAP } from "@/lib/known-vendors";
 import { discoverStatusUrl, normalizeVendorName } from "@/lib/status-discovery";
-import { resolveStatusUrl } from "@/types";
+import { resolveStatusUrl, VENDOR_BLACKLIST } from "@/types";
 import type { RegisteredApp } from "@/types";
 
 interface UpmPlugin {
@@ -364,9 +363,6 @@ export async function POST(request: Request) {
       return result;
     };
 
-    /** If we already fetched a logo in the KNOWN_VENDOR_MAP branch, reuse it. */
-    let precachedLogoRes: LogoResolution | undefined;
-
     // Forge / Ecosystem serverless: ARI or URN app keys — shared infra status
     if (isForgeServerlessKey(plugin.key)) {
       const { logoUrl } = await resolvePluginLogo(plugin);
@@ -380,35 +376,16 @@ export async function POST(request: Request) {
 
     const normalizedKey = normalizeVendorName(rawVendor);
 
-    // ── Priority 1: KNOWN_VENDOR_MAP (lowercase keys) ─────────────────────
-    if (normalizedKey in KNOWN_VENDOR_MAP) {
-      const entry = KNOWN_VENDOR_MAP[normalizedKey];
-      const logoRes = await resolvePluginLogo(plugin);
-
-      if (entry === null) {
-        return logMapCheck({
-          logoUrl: logoRes.logoUrl,
-          statusUrl: "",
-          checkType: "custom",
-          statusSource: "none",
-        });
-      }
-      // Do not map these product lines to Tempo (bad UPM vendor strings)
-      if (isTempoStatusUrl(entry) && isTempoBlockedByAppName(appName)) {
-        precachedLogoRes = logoRes;
-        // fall through to priority 2/3
-      } else {
-        return logMapCheck({
-          logoUrl: logoRes.logoUrl,
-          statusUrl: entry,
-          checkType: "statuspage_api",
-          statusSource: "map",
-        });
-      }
+    // ── Priority 1: Blacklist — vendor has no public status page ─────────────
+    if (VENDOR_BLACKLIST.has(normalizedKey)) {
+      const { logoUrl } = await resolvePluginLogo(plugin);
+      return logMapCheck({ logoUrl, statusUrl: "", checkType: "custom", statusSource: "none" });
     }
 
-    // ── Priority 2: PRODUCT_RULES + VENDOR_STATUS_MAP (types/index.ts) ─────
-    let knownStatus = resolveStatusUrl(appName, rawVendor);
+    // ── Priority 2: PRODUCT_RULES + VENDOR_STATUS_MAP (types/index.ts) ──────
+    // Pass the normalized key so M&A aliases (e.g. "SoftwarePlant" → "appfire")
+    // resolve correctly against the lowercase VENDOR_STATUS_MAP keys.
+    let knownStatus = resolveStatusUrl(appName, normalizedKey);
     if (
       knownStatus &&
       isTempoStatusUrl(knownStatus.statusUrl) &&
@@ -419,9 +396,7 @@ export async function POST(request: Request) {
 
     // ── Priority 3: Auto-discovery — use normalized key for URL slug guesses ─
     const [logoRes, discoveredStatus] = await Promise.all([
-      precachedLogoRes !== undefined
-        ? Promise.resolve(precachedLogoRes)
-        : resolvePluginLogo(plugin),
+      resolvePluginLogo(plugin),
       knownStatus ? Promise.resolve(null) : discoverStatusUrl(normalizedKey),
     ]);
     const logoUrl = logoRes.logoUrl;

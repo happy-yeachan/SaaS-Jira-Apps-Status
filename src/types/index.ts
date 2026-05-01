@@ -84,63 +84,77 @@ export function resolveStatusUrl(
 }
 
 /**
- * Maps vendor name → Statuspage API URL (fallback when no product rule matches).
- * All entries are Atlassian Statuspage instances so checkType is always
- * "statuspage_api". The public status page URL is derived by stripping
- * "/api/v2/status.json" from the end of each URL.
+ * Single source of truth for vendor → status-page URL.
+ *
+ * Keys are lowercase so lookups work with both raw Marketplace names and
+ * the normalized keys produced by `normalizeVendorName()` in status-discovery.ts.
+ * All URLs are Atlassian Statuspage summary endpoints (summary.json includes
+ * component-level status; the status route upgrades status.json → summary.json
+ * transparently for any stale localStorage entries).
+ *
+ * Vendors confirmed to have no public status page live in VENDOR_BLACKLIST below.
  */
 export const VENDOR_STATUS_MAP: Record<string, string> = {
-  // ── Top-tier vendors ─────────────────────────────────────────────────────
-  "Appfire":            "https://appfire-apps.statuspage.io/api/v2/summary.json",
-  "Tempo Software":     "https://status.tempo.io/api/v2/summary.json",
-  "Adaptavist":         "https://status.connect.adaptavist.com/api/v2/summary.json",
-  "SmartBear":          "https://zephyr.status.smartbear.com/api/v2/summary.json",
+  // ── M&A giants ────────────────────────────────────────────────────────────
+  "appfire":            "https://appfire-apps.statuspage.io/api/v2/summary.json",
+  "tempo software":     "https://status.tempo.io/api/v2/summary.json",
+  "adaptavist":         "https://status.connect.adaptavist.com/api/v2/summary.json",
+  "smartbear":          "https://zephyr.status.smartbear.com/api/v2/summary.json",
 
-  // ── Diagramming & whiteboarding ──────────────────────────────────────────
-  "Seibert Media":      "https://status.draw.io/index.json",
-  "JGraph":             "https://status.draw.io/index.json",
-  "Gliffy":             "https://status.gliffy.com/api/v2/status.json",
-  "Balsamiq":           "https://status.balsamiq.com/api/v2/status.json",
-  "Lucid":              "https://status.lucid.co/api/v2/status.json",
-  "Miro":               "https://status.miro.com/api/v2/status.json",
+  // ── Diagramming & whiteboarding ───────────────────────────────────────────
+  "seibert media":      "https://status.draw.io/index.json",
+  "jgraph":             "https://status.draw.io/index.json",
+  "gliffy":             "https://status.gliffy.com/api/v2/summary.json",
+  "balsamiq":           "https://status.balsamiq.com/api/v2/summary.json",
+  "lucid":              "https://status.lucid.co/api/v2/summary.json",
+  "miro":               "https://status.miro.com/api/v2/summary.json",
 
-  // ── Reporting, BI & data ─────────────────────────────────────────────────
-  "eazyBI":             "https://status.eazybi.com/api/v2/status.json",
-  "K15t":               "https://status.k15t.com/api/v2/status.json",
-  "Midori":             "https://status.midori-global.com/api/v2/status.json",
-  "Oboard":             "https://status.oboard.io/api/v2/status.json",
+  // ── Reporting, BI & data ──────────────────────────────────────────────────
+  "eazybi":             "https://status.eazybi.com/api/v2/summary.json",
+  "oboard":             "https://status.oboard.io/api/v2/summary.json",
 
-  // ── QA, testing & security ───────────────────────────────────────────────
-  "Xblend":             "https://xray.statuspage.io/api/v2/summary.json",
-  "QMetry":             "https://status.qmetry.com/api/v2/status.json",
-  "Tricentis":          "https://status.tricentis.com/api/v2/status.json",
-  "Resolution":         "https://status.resolution.de/api/v2/status.json",
+  // ── QA, testing & security ────────────────────────────────────────────────
+  "xblend":             "https://xray.statuspage.io/api/v2/summary.json",
+  "qmetry":             "https://status.qmetry.com/api/v2/summary.json",
+  "tricentis":          "https://status.tricentis.com/api/v2/summary.json",
+  "resolution":         "https://status.resolution.de/api/v2/summary.json",
 
-  // ── Dev tools & integrations ─────────────────────────────────────────────
-  "GitKraken":          "https://status.gitkraken.com/api/v2/status.json",
-  "Exalate":            "https://status.exalate.com/api/v2/status.json",
-  "Move Work Forward":  "https://status.moveworkforward.com/api/v2/status.json",
+  // ── Dev tools & integrations ──────────────────────────────────────────────
+  "gitkraken":          "https://status.gitkraken.com/api/v2/summary.json",
+  "herocoders":         "https://status.herocoders.com/api/v2/summary.json",
+  "exalate":            "https://status.exalate.com/api/v2/summary.json",
+  "move work forward":  "https://status.moveworkforward.com/api/v2/summary.json",
 
-  // ── Utilities & agile management ─────────────────────────────────────────
-  "Deviniti":           "https://status.deviniti.com/api/v2/status.json",
-  "Refined":            "https://status.refined.com/api/v2/status.json",
-  "Elements":           "https://status.elements-apps.com/api/v2/status.json",
-  "Deiser":             "https://status.deiser.com/api/v2/status.json",
-  "Easy Agile":         "https://status.easyagile.com/api/v2/status.json",
-  "Aha!":               "https://status.aha.io/api/v2/status.json",
-  "ProjectBalm":        "https://status.projectbalm.com/api/v2/status.json",
+  // ── Utilities & agile management ──────────────────────────────────────────
+  "deviniti":           "https://status.deviniti.com/api/v2/summary.json",
+  "refined":            "https://status.refined.com/api/v2/summary.json",
+  "elements":           "https://status.elements-apps.com/api/v2/summary.json",
+  "deiser":             "https://status.deiser.com/api/v2/summary.json",
+  "easy agile":         "https://status.easyagile.com/api/v2/summary.json",
+  "aha!":               "https://status.aha.io/api/v2/summary.json",
+  "projectbalm":        "https://status.projectbalm.com/api/v2/summary.json",
+  "decadis":            "https://status.decadis.com/api/v2/summary.json",
 };
+
+/**
+ * Vendors confirmed to have no public status page.
+ * Auto-discovery is skipped for these in the import pipeline.
+ * Keys match the lowercase output of `normalizeVendorName()`.
+ */
+export const VENDOR_BLACKLIST = new Set([
+  "k15t",
+  "midori",
+  "reliex",
+  "ease solutions",
+  "open source consulting",
+]);
 
 export function lookupVendorStatus(vendorName: string): VendorStatusConfig | null {
   const normalized = vendorName.toLowerCase().trim();
   for (const [key, url] of Object.entries(VENDOR_STATUS_MAP)) {
-    const keyNorm = key.toLowerCase();
-    // Never use keyNorm.includes(normalized) : short substrings like "software" would
-    // incorrectly match "Tempo Software" and other long keys.
-    if (
-      keyNorm === normalized ||
-      normalized.includes(keyNorm)
-    ) {
+    // Never use key.includes(normalized): short substrings like "software" would
+    // incorrectly match "tempo software" and other compound keys.
+    if (key === normalized || normalized.includes(key)) {
       return { statusUrl: url, checkType: "statuspage_api" };
     }
   }
