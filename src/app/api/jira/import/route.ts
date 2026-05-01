@@ -332,9 +332,12 @@ export async function POST(request: Request) {
           };
           const addons = searchData._embedded?.addons ?? [];
           const nameLower = plugin.name.toLowerCase();
-          const match = addons.find(
-            (a) => (a as { name?: string }).name?.toLowerCase() === nameLower,
-          );
+          const match = addons.find((a) => {
+            const mpName = (a as { name?: string }).name?.toLowerCase() ?? "";
+            // Accept exact match OR marketplace name that starts with the UPM name
+            // (e.g. UPM "Exalate" matches MP "Exalate: Integrations for Jira, ...")
+            return mpName === nameLower || mpName.startsWith(nameLower + ":");
+          });
           if (match) {
             const logoUrl = extractLogoUrl(match);
             if (logoUrl) return { logoUrl, onMarketplace: true };
