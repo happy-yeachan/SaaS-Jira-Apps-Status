@@ -233,6 +233,173 @@ export async function POST(request: Request) {
   }
 
 
+  // ── Method 2: Atlassian Platform GraphQL API ──────────────────────────────
+  // The /rest/atlassian-connect/1/addons endpoint requires OAuth 2.0 and is
+  // permanently blocked for API-token Basic Auth (Atlassian policy).
+  // The Platform Gateway GraphQL API — the same API that powers Atlassian's
+  // cloud console — may accept API-token Basic Auth for tenant-level queries.
+  // The `appInstallationsByContext` query lists every installed Forge + Connect app.
+  let graphqlAppsFound = 0;
+
+  try {
+    const siRes = await fetch(`${jiraDomain}/rest/api/3/serverInfo`, {
+      method: "GET",
+      cache: "no-store",
+      headers: { Authorization: authHeader, Accept: "application/json" },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (siRes.ok) {
+      const siData = (await siRes.json()) as { cloudId?: string };
+      const cloudId = siData.cloudId;
+
+      if (cloudId) {
+        const gqlPayload = {
+          query: `query($cloudId: ID!) {
+            ecosystem {
+              appInstallationsByContext(context: { cloudId: $cloudId, product: "jira" }) {
+                nodes {
+                  app { id name key vendor { name } }
+                  status
+                }
+              }
+            }
+          }`,
+          variables: { cloudId },
+        };
+
+        for (const gqlUrl of [
+          `${jiraDomain}/gateway/api/graphql`,
+          `https://api.atlassian.com/graphql`,
+        ]) {
+          try {
+            const gqlRes = await fetch(gqlUrl, {
+              method: "POST",
+              cache: "no-store",
+              headers: {
+                Authorization: authHeader,
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: JSON.stringify(gqlPayload),
+              signal: AbortSignal.timeout(8000),
+            });
+
+            if (!gqlRes.ok) continue;
+
+            const gqlData = (await gqlRes.json()) as {
+              data?: {
+                ecosystem?: {
+                  appInstallationsByContext?: {
+                    nodes?: Array<{
+                      app?: { id?: string; name?: string; key?: string; vendor?: { name?: string } };
+                      status?: string;
+                    }>;
+                  };
+                };
+              };
+            };
+
+            const nodes =
+              gqlData.data?.ecosystem?.appInstallationsByContext?.nodes ?? [];
+            for (const node of nodes) {
+              const key = node.app?.key ?? node.app?.id;
+              const name = node.app?.name;
+              if (!key || !name) continue;
+              if (seenKeys.has(key)) continue;
+              seenKeys.add(key);
+              allPlugins.push({
+                key,
+                name,
+                enabled: node.status !== "DISABLED",
+                userInstalled: true,
+                vendor: node.app?.vendor?.name
+                  ? { name: node.app.vendor.name }
+                  : undefined,
+              });
+              graphqlAppsFound++;
+            }
+
+            if (graphqlAppsFound > 0) break;
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[graphql] appInstallationsByContext:", err);
+  }
+
+
+  // ── Method 3: Known Connect app endpoint probing ──────────────────────────
+  // Each major Connect app registers its own REST namespace in Jira.
+  // If the path exists (app installed), Jira routes the request to the app's
+  // own handler: 200 = installed & accessible, 403 = installed but app-level
+  // auth required, 404 = route not registered = app NOT installed.
+  // We run all probes in parallel with a 4-second timeout each.
+
+  interface KnownConnectApp {
+    key: string;
+    name: string;
+    vendorName: string;
+    probeEndpoint: string;
+    /** Accept 403 as "installed" — app exists but needs its own permission model. */
+    trust403?: boolean;
+  }
+
+  const KNOWN_CONNECT_APPS: KnownConnectApp[] = [
+    { key: "com.onresolve.jira.groovy.groovyrunner", name: "ScriptRunner for Jira", vendorName: "Adaptavist", probeEndpoint: "/rest/scriptrunner/latest/whoami", trust403: true },
+    { key: "is.origo.jira.tempo-plugin", name: "Tempo Timesheets", vendorName: "Tempo Software", probeEndpoint: "/rest/tempo-timesheets/4/holiday-scheme", trust403: true },
+    { key: "com.tempoplugin.tempo-teams-v2", name: "Tempo Planner", vendorName: "Tempo Software", probeEndpoint: "/rest/tempo-planning/1/team", trust403: true },
+    { key: "com.smartbear.jira.plugin.scale", name: "Zephyr Scale", vendorName: "SmartBear", probeEndpoint: "/rest/atm/1.0/info" },
+    { key: "com.thed.zephyr.je", name: "Zephyr Squad", vendorName: "SmartBear", probeEndpoint: "/rest/zapi/latest/util/serverInfo", trust403: true },
+    { key: "com.almworks.jira.structure", name: "Structure - Project Management at Scale", vendorName: "ALM Works", probeEndpoint: "/rest/structure/1.0/structure", trust403: true },
+    { key: "com.xblend.jira.plugin.jira-xray", name: "Xray Test Management for Jira", vendorName: "Xpand IT", probeEndpoint: "/rest/raven/1.0/api/testplan", trust403: true },
+    { key: "com.bigbrassband.jira.git", name: "Git Integration for Jira", vendorName: "BigBrassBand", probeEndpoint: "/rest/gitintegration/1.0/repository", trust403: true },
+    { key: "com.eazybi.jira.eazybi-jira", name: "eazyBI Reports and Charts for Jira", vendorName: "eazyBI", probeEndpoint: "/rest/eazybi/1.0/account", trust403: true },
+    { key: "com.exalate.jiranode", name: "Exalate Issue Sync", vendorName: "iDalko", probeEndpoint: "/rest/exalate/1/node/status", trust403: true },
+    { key: "ru.teamlead.jira.plugins.jira-workflow-toolbox", name: "Workflow Toolbox", vendorName: "TeamLead", probeEndpoint: "/rest/wt/1.0/info", trust403: true },
+    { key: "com.riada.insight", name: "Assets & Inventory Plugin", vendorName: "Riada", probeEndpoint: "/rest/insight/1.0/global/config", trust403: true },
+    { key: "com.jiramanifest.jira-misc-custom-fields", name: "Jira Misc Workflow Extensions", vendorName: "Webwork", probeEndpoint: "/rest/jmwe/1.0/info", trust403: true },
+  ];
+
+  const appsToProbe = KNOWN_CONNECT_APPS.filter((a) => !seenKeys.has(a.key));
+  const probeResults = await Promise.allSettled(
+    appsToProbe.map(async (app) => {
+      try {
+        const res = await fetch(`${jiraDomain}${app.probeEndpoint}`, {
+          method: "GET",
+          cache: "no-store",
+          headers: { Authorization: authHeader, Accept: "application/json" },
+          signal: AbortSignal.timeout(4000),
+        });
+        const installed =
+          res.status === 200 || (app.trust403 === true && res.status === 403);
+        return installed ? app : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  let probedAppsFound = 0;
+  for (const result of probeResults) {
+    if (result.status !== "fulfilled" || !result.value) continue;
+    const app = result.value;
+    if (seenKeys.has(app.key)) continue;
+    seenKeys.add(app.key);
+    allPlugins.push({
+      key: app.key,
+      name: app.name,
+      enabled: true,
+      userInstalled: true,
+      vendor: { name: app.vendorName },
+    });
+    probedAppsFound++;
+  }
+
+
   // ── Inclusion criteria ────────────────────────────────────────────────────
   // The UPM API (with Accept: application/vnd.atl.plugins.installed+json) marks
   // every plugin the admin explicitly installed from the Marketplace with
@@ -553,5 +720,7 @@ export async function POST(request: Request) {
     serverlessCount,
     marketplaceCount,
     connectApiBlocked,
+    graphqlAppsFound,
+    probedAppsFound,
   });
 }

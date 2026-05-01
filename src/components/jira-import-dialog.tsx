@@ -57,6 +57,8 @@ interface FetchResult {
   serverlessCount: number;
   marketplaceCount: number;
   connectApiBlocked: boolean;
+  graphqlAppsFound: number;
+  probedAppsFound: number;
 }
 
 type Step = "form" | "results";
@@ -204,6 +206,8 @@ export function JiraImportDialog({
         serverlessCount?: number;
         marketplaceCount?: number;
         connectApiBlocked?: boolean;
+        graphqlAppsFound?: number;
+        probedAppsFound?: number;
         error?: string;
       };
 
@@ -230,6 +234,8 @@ export function JiraImportDialog({
         serverlessCount: data.serverlessCount ?? 0,
         marketplaceCount: data.marketplaceCount ?? 0,
         connectApiBlocked: data.connectApiBlocked ?? false,
+        graphqlAppsFound: data.graphqlAppsFound ?? 0,
+        probedAppsFound: data.probedAppsFound ?? 0,
       });
       setStep("results");
     } catch (err) {
@@ -446,18 +452,41 @@ export function JiraImportDialog({
         {/* ── Step 2: Results list ────────────────────────────────────── */}
         {step === "results" && (
           <>
-            {/* Connect API info — always blocked with API tokens (Atlassian platform limitation) */}
+            {/* Connect API detection notice */}
             {result?.connectApiBlocked && (
-              <div className="flex items-start gap-2 border-b bg-blue-50 px-4 py-3 dark:bg-blue-950/30">
-                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
+              <div className={`flex items-start gap-2 border-b px-4 py-3 ${
+                (result.probedAppsFound ?? 0) > 0 || (result.graphqlAppsFound ?? 0) > 0
+                  ? "bg-green-50 dark:bg-green-950/30"
+                  : "bg-blue-50 dark:bg-blue-950/30"
+              }`}>
+                <Info className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${
+                  (result.probedAppsFound ?? 0) > 0 || (result.graphqlAppsFound ?? 0) > 0
+                    ? "text-green-500"
+                    : "text-blue-500"
+                }`} />
                 <div className="space-y-0.5">
-                  <p className="text-xs font-medium text-blue-800 dark:text-blue-300">
-                    ScriptRunner, Tempo 등 Connect 앱은 미포함
-                  </p>
-                  <p className="text-[11px] text-blue-700 dark:text-blue-400">
-                    Atlassian의 정책으로 API 토큰으로는 Connect 앱 목록을 가져올 수 없습니다 (권한과 무관).
-                    OSGi 플러그인만 가져왔습니다.
-                  </p>
+                  {(result.probedAppsFound ?? 0) > 0 || (result.graphqlAppsFound ?? 0) > 0 ? (
+                    <>
+                      <p className="text-xs font-medium text-green-800 dark:text-green-300">
+                        Connect 앱 {(result.probedAppsFound ?? 0) + (result.graphqlAppsFound ?? 0)}개 감지됨
+                      </p>
+                      <p className="text-[11px] text-green-700 dark:text-green-400">
+                        Connect API는 차단되었지만 앱별 엔드포인트 탐색으로 설치된 앱을 감지했습니다.
+                        {(result.graphqlAppsFound ?? 0) > 0 && ` (GraphQL: ${result.graphqlAppsFound}개)`}
+                        {(result.probedAppsFound ?? 0) > 0 && ` (엔드포인트 탐색: ${result.probedAppsFound}개)`}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs font-medium text-blue-800 dark:text-blue-300">
+                        ScriptRunner, Tempo 등 Connect 앱은 미포함
+                      </p>
+                      <p className="text-[11px] text-blue-700 dark:text-blue-400">
+                        Atlassian의 정책으로 API 토큰으로는 Connect 앱 목록을 가져올 수 없습니다.
+                        앱별 엔드포인트 탐색도 설치된 항목을 찾지 못했습니다.
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
             )}
