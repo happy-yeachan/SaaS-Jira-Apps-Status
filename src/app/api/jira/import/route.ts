@@ -334,9 +334,10 @@ export async function POST(request: Request) {
           const nameLower = plugin.name.toLowerCase();
           const match = addons.find((a) => {
             const mpName = (a as { name?: string }).name?.toLowerCase() ?? "";
-            // Accept exact match OR marketplace name that starts with the UPM name
-            // (e.g. UPM "Exalate" matches MP "Exalate: Integrations for Jira, ...")
-            return mpName === nameLower || mpName.startsWith(nameLower + ":");
+            // Accept exact match OR marketplace name starting with the UPM name
+            // (e.g. UPM "Exalate" → MP "Exalate Classic Connector for Jira ...").
+            // Search results are relevance-ranked so the first hit is the best match.
+            return mpName === nameLower || mpName.startsWith(nameLower);
           });
           if (match) {
             const logoUrl = extractLogoUrl(match);
