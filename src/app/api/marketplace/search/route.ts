@@ -27,7 +27,7 @@
 
 import { NextResponse } from "next/server";
 import { resolveStatusUrl, VENDOR_BLACKLIST, type MarketplaceSearchItem } from "@/types";
-import { normalizeVendorName } from "@/lib/status-discovery";
+import { discoverStatusUrl, normalizeVendorName } from "@/lib/status-discovery";
 
 const MARKETPLACE_BASE = "https://marketplace.atlassian.com";
 
@@ -109,6 +109,50 @@ function parseAddons(payload: unknown): MarketplaceSearchItem[] {
   });
 }
 
+/**
+ * For search results that have no static status URL, attempt auto-discovery
+ * by probing common status-page URL patterns (status.vendor.com, vendor.statuspage.io, …).
+ *
+ * Deduplicates by vendor name so 3 SmartBear apps only fire one probe set, not three.
+ * Caps at 12 unique vendors to bound network load; runs all probes in parallel.
+ * discoverStatusUrl already has 2 s timeouts per probe, so total added latency ≤ ~2 s.
+ */
+async function enrichWithDiscovery(
+  items: MarketplaceSearchItem[],
+): Promise<MarketplaceSearchItem[]> {
+  const uncovered = items.filter((i) => i.statusUrl === "");
+  if (uncovered.length === 0) return items;
+
+  // One discovery call per unique normalized vendor name
+  const vendorToItems = new Map<string, MarketplaceSearchItem[]>();
+  for (const item of uncovered) {
+    const vendor = normalizeVendorName(item.vendorName);
+    if (!vendorToItems.has(vendor)) vendorToItems.set(vendor, []);
+    vendorToItems.get(vendor)!.push(item);
+  }
+
+  const uniqueVendors = [...vendorToItems.keys()].slice(0, 12);
+  const results = await Promise.allSettled(
+    uniqueVendors.map((v) => discoverStatusUrl(v)),
+  );
+
+  const discoveryMap = new Map<string, { statusUrl: string; checkType: MarketplaceSearchItem["checkType"] }>();
+  uniqueVendors.forEach((vendor, i) => {
+    const r = results[i];
+    if (r.status === "fulfilled" && r.value) {
+      discoveryMap.set(vendor, r.value);
+    }
+  });
+
+  if (discoveryMap.size === 0) return items;
+
+  return items.map((item) => {
+    if (item.statusUrl !== "") return item;
+    const discovered = discoveryMap.get(normalizeVendorName(item.vendorName));
+    return discovered ? { ...item, ...discovered } : item;
+  });
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
 
@@ -146,7 +190,8 @@ export async function GET(request: Request) {
     }
 
     const payload = (await res.json()) as unknown;
-    const items = sortByTextRelevance(parseAddons(payload), text);
+    const rawItems = sortByTextRelevance(parseAddons(payload), text);
+    const items = await enrichWithDiscovery(rawItems);
 
     return NextResponse.json({ items });
   } catch (err) {

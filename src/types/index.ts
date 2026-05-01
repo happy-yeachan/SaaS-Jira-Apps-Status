@@ -111,7 +111,7 @@ export const VENDOR_STATUS_MAP: Record<string, string> = {
 
   // ── Reporting, BI & data ──────────────────────────────────────────────────
   "eazybi":             "https://status.eazybi.com/api/v2/summary.json",
-  "oboard":             "https://status.oboard.io/api/v2/summary.json",
+  "oboard":             "https://oboard.instatus.com/summary.json",
 
   // ── QA, testing & security ────────────────────────────────────────────────
   "xblend":             "https://xray.statuspage.io/api/v2/summary.json",
@@ -120,10 +120,11 @@ export const VENDOR_STATUS_MAP: Record<string, string> = {
   "resolution":         "https://status.resolution.de/api/v2/summary.json",
 
   // ── Dev tools & integrations ──────────────────────────────────────────────
-  "gitkraken":          "https://status.gitkraken.com/api/v2/summary.json",
+  "gitkraken":          "https://gij.gitkrakenstatus.com/api/v2/summary.json",
   "herocoders":         "https://status.herocoders.com/api/v2/summary.json",
   "exalate":            "https://status.exalate.com/api/v2/summary.json",
   "move work forward":  "https://status.moveworkforward.com/api/v2/summary.json",
+  "valiantys":          "https://status.elements-apps.com/api/v2/summary.json",
 
   // ── Utilities & agile management ──────────────────────────────────────────
   "deviniti":           "https://status.deviniti.com/api/v2/summary.json",

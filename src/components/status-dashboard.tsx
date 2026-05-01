@@ -13,10 +13,12 @@ import {
   LayoutGrid,
   PlusCircle,
   RefreshCw,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { AddAppDialog } from "@/components/add-app-dialog";
 import { AppLogo } from "@/components/app-logo";
+import { QuickSetupDialog } from "@/components/quick-setup-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -375,6 +377,7 @@ export function StatusDashboard() {
   const [sortKey, setSortKey] = useState<SortKey>("status");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [quickSetupOpen, setQuickSetupOpen] = useState(false);
 
   // Use a ref so async callbacks always read the latest apps value
   const appsRef = useRef(apps);
@@ -523,6 +526,33 @@ export function StatusDashboard() {
     }
   };
 
+  const handleBulkAddApps = (newApps: RegisteredApp[]) => {
+    if (newApps.length === 0) return;
+    setApps((prev) => {
+      const incomingById = new Map(newApps.map((a) => [a.id, a]));
+      const next = prev.map((a) => {
+        const upd = incomingById.get(a.id);
+        return upd ? { ...a, ...upd } : a;
+      });
+      const prevIds = new Set(prev.map((a) => a.id));
+      const brandNew = newApps.filter((a) => !prevIds.has(a.id));
+      return brandNew.length > 0 || next.some((a, i) => a !== prev[i])
+        ? [...brandNew, ...next]
+        : prev;
+    });
+    const checkableApps = newApps.filter((a) => a.statusUrl);
+    if (checkableApps.length > 0) {
+      void fetch("/api/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apps: checkableApps }),
+      })
+        .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
+        .then((data) => { if (data?.results) applyResults(data.results); })
+        .catch(() => undefined);
+    }
+  };
+
   const handleDeleteApp = (appId: string) => {
     setApps((prev) => prev.filter((a) => a.id !== appId));
     setLatestById((prev) => { const n = { ...prev }; delete n[appId]; return n; });
@@ -607,6 +637,14 @@ export function StatusDashboard() {
             <RefreshCw className={cn("h-3.5 w-3.5", isChecking && "animate-spin")} />
             Refresh
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setQuickSetupOpen(true)}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Quick Setup
+          </Button>
           <Button size="sm" onClick={() => setAddDialogOpen(true)}>
             <PlusCircle className="h-3.5 w-3.5" />
             Add App
@@ -678,10 +716,14 @@ export function StatusDashboard() {
               <LayoutGrid className="mb-4 h-12 w-12 text-muted-foreground/40" />
               <h3 className="text-base font-semibold">No apps monitored</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                Add apps from the Atlassian Marketplace to start monitoring.
+                Pick the apps your team uses from a curated list, or search the Marketplace.
               </p>
               <div className="mt-6 flex gap-3">
-                <Button onClick={() => setAddDialogOpen(true)}>
+                <Button onClick={() => setQuickSetupOpen(true)}>
+                  <Sparkles className="mr-1.5 h-4 w-4" />
+                  Quick Setup
+                </Button>
+                <Button variant="outline" onClick={() => setAddDialogOpen(true)}>
                   <PlusCircle className="mr-1.5 h-4 w-4" />
                   Add App
                 </Button>
@@ -800,6 +842,12 @@ export function StatusDashboard() {
             open={addDialogOpen}
             onOpenChange={setAddDialogOpen}
             onAddApp={handleAddApp}
+            existingIds={existingIds}
+          />
+          <QuickSetupDialog
+            open={quickSetupOpen}
+            onOpenChange={setQuickSetupOpen}
+            onBulkAddApps={handleBulkAddApps}
             existingIds={existingIds}
           />
         </>
