@@ -77,7 +77,6 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-
   if (!jiraDomain.startsWith("https://")) {
     return NextResponse.json(
       { error: "jiraDomain must start with https://" },
@@ -85,20 +84,25 @@ export async function POST(request: Request) {
     );
   }
 
+  const authHeader = `Basic ${Buffer.from(`${email}:${apiToken}`).toString("base64")}`;
+  const apiBase = jiraDomain;
+  console.log(`[jira/import] Basic Auth | domain=${jiraDomain}`);
+
   // ── Call UPM API (paginated) ─────────────────────────────────────────────
-  const credentials = Buffer.from(`${email}:${apiToken}`).toString("base64");
   const upmHeaders = {
-    Authorization: `Basic ${credentials}`,
+    Authorization: authHeader,
     // The UPM API returns 406 if Accept is missing or set to */*.
     Accept: "application/vnd.atl.plugins.installed+json, application/json",
     "Content-Type": "application/json",
     "User-Agent": "NextJS-Jira-Importer/1.0",
   };
 
-  // First page — auth / domain errors must surface here before we continue.
+  // ── UPM API: OSGi plugins (paginated) ───────────────────────────────────
+  const allPlugins: UpmPlugin[] = [];
+
   let firstRes: Response;
   try {
-    firstRes = await fetch(`${jiraDomain}/rest/plugins/1.0/?limit=500`, {
+    firstRes = await fetch(`${apiBase}/rest/plugins/1.0/?limit=500`, {
       method: "GET",
       cache: "no-store",
       headers: upmHeaders,
@@ -126,21 +130,13 @@ export async function POST(request: Request) {
   }
 
   const firstData = (await firstRes.json()) as UpmResponse;
-  const allPlugins: UpmPlugin[] = [...(firstData.plugins ?? [])];
+  allPlugins.push(...(firstData.plugins ?? []));
 
-  // Follow pagination links — some Jira Cloud instances cap the first page at
-  // 50–100 plugins regardless of the ?limit parameter.
   let nextLink = firstData.links?.next;
   while (nextLink) {
-    const nextUrl = nextLink.startsWith("http")
-      ? nextLink
-      : `${jiraDomain}${nextLink}`;
+    const nextUrl = nextLink.startsWith("http") ? nextLink : `${apiBase}${nextLink}`;
     try {
-      const nextRes = await fetch(nextUrl, {
-        method: "GET",
-        cache: "no-store",
-        headers: upmHeaders,
-      });
+      const nextRes = await fetch(nextUrl, { method: "GET", cache: "no-store", headers: upmHeaders });
       if (!nextRes.ok) break;
       const nextData = (await nextRes.json()) as UpmResponse;
       const batch = nextData.plugins ?? [];
@@ -148,7 +144,7 @@ export async function POST(request: Request) {
       allPlugins.push(...batch);
       nextLink = nextData.links?.next;
     } catch {
-      break; // Network hiccup on a subsequent page — work with what we have
+      break;
     }
   }
 
@@ -187,13 +183,14 @@ export async function POST(request: Request) {
     return [];
   };
 
-  // Try several known endpoints — Atlassian has silently renamed/moved them
   const CONNECT_ENDPOINTS = [
     `${jiraDomain}/rest/atlassian-connect/1/addons`,
-    `${jiraDomain}/rest/plugins/1.0/addons`,          // older alias
+    `${jiraDomain}/rest/plugins/1.0/addons`,
   ];
 
   let connectTotal = 0;
+  let connectApiBlocked = false;
+  let connectLastStatus = 0;
 
   for (const endpoint of CONNECT_ENDPOINTS) {
     try {
@@ -203,11 +200,16 @@ export async function POST(request: Request) {
         headers: upmHeaders,
       });
 
+      connectLastStatus = res.status;
       const rawText = await res.text();
       console.log(
         `[connect] ${endpoint} → HTTP ${res.status} | body(500)=${rawText.slice(0, 500)}`,
       );
 
+      if (res.status === 403 || res.status === 401) {
+        connectApiBlocked = true;
+        continue;
+      }
       if (!res.ok) continue;
 
       let parsed: unknown;
@@ -239,65 +241,6 @@ export async function POST(request: Request) {
 
   console.log(`[jira/import] Connect add-ons merged: ${connectTotal} (total combined: ${allPlugins.length})`);
 
-  // ── Inclusion criteria ──────────────────────────────────────────────────
-  // Atlassian-made apps that are genuine marketplace integrations.
-  // Used as a whitelist when userInstalled is missing but vendor is "Atlassian".
-  const ATLASSIAN_VENDOR_WHITELIST = [
-    "github for jira",
-    "slack for jira",
-    "microsoft teams for jira",
-    "zoom for jira",
-    "google sheets for jira",
-    "google drive & docs for jira",
-  ];
-
-  // Key-prefix block list for infrastructure plugins that slip through.
-  const BLOCKED_KEY_PREFIXES = [
-    "com.atlassian.jira.plugins.core",
-    "com.atlassian.jira.internal",
-    "com.atlassian.jira.dev",
-    "com.atlassian.frontend",
-    "com.atlassian.troubleshooting",
-    "com.atlassian.upm",
-    "com.atlassian.oauth",
-    "com.atlassian.webhooks",
-    "com.atlassian.jwt",
-    "com.atlassian.analytics",
-    "com.atlassian.applinks",
-    "com.atlassian.plugins.document",
-    "com.atlassian.plugins.atlassian-connect-plugin",
-    "com.atlassian.plugins.rest",
-    "com.atlassian.plugins.servlet",
-    "com.atlassian.plugins.editor",
-    "com.atlassian.auiplugin",
-    "com.atlassian.labs.hipchat",
-    "com.atlassian.streams",
-    "com.atlassian.gadgets",
-    "com.atlassian.jira.extra",
-    "com.atlassian.confluence.extra",
-  ];
-
-  // Name-fragment block list for WAR-bundled modules identifiable by display name.
-  const BLOCKED_NAME_FRAGMENTS = [
-    "atlassian jira - plugins",
-    "atlassian confluence - plugins",
-    "atlassian jira - project templates",
-    "atlassian jira - administration",
-  ];
-
-  const isWhitelisted = (name: string) => {
-    const lower = name.toLowerCase();
-    return ATLASSIAN_VENDOR_WHITELIST.some((w) => lower.includes(w));
-  };
-
-  const isBlockedKey = (key: string) =>
-    BLOCKED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
-
-  const isBlockedName = (name: string) => {
-    const lower = name.toLowerCase();
-    return BLOCKED_NAME_FRAGMENTS.some((frag) => lower.includes(frag));
-  };
-
   // ── Debug: dump every plugin before filtering ────────────────────────────
   console.log(`[jira/import] --- RAW UPM DUMP (${allPlugins.length} plugins) ---`);
   allPlugins.forEach((p) => {
@@ -308,30 +251,14 @@ export async function POST(request: Request) {
   console.log(`[jira/import] --- END RAW DUMP ---`);
 
   // ── Inclusion criteria ────────────────────────────────────────────────────
-  // NOTE: userInstalled is intentionally NOT used as a filter signal.
-  //
-  // In Jira Cloud, Atlassian manages plugin lifecycle centrally. Many real
-  // marketplace apps (e.g. ScriptRunner by Adaptavist) report userInstalled: false
-  // even though the admin explicitly added them from the marketplace.
-  //
-  // RELIABLE signal: plugin key namespace.
-  //   • Virtually every Atlassian system plugin ships under com.atlassian.*
-  //   • Third-party apps use their own namespaces (com.onresolve.*, io.tempo.*, etc.)
-  //   • Whitelist: Atlassian-built marketplace integrations that use com.atlassian.*
-
+  // The UPM API (with Accept: application/vnd.atl.plugins.installed+json) marks
+  // every plugin the admin explicitly installed from the Marketplace with
+  // userInstalled: true. Atlassian's own system infrastructure is false.
+  // This is the canonical, supported signal — no key-prefix heuristics needed.
   const userPlugins = allPlugins.filter(
     (p): p is UpmPlugin & { key: string; name: string } => {
       if (!p.key || !p.name) return false;
-
-      // Always skip confirmed infrastructure key/name patterns
-      if (isBlockedKey(p.key)) return false;
-      if (isBlockedName(p.name)) return false;
-
-      // Exclude the entire com.atlassian.* namespace — Atlassian system infrastructure.
-      // Whitelist passes through Atlassian-built marketplace integrations.
-      if (p.key.startsWith("com.atlassian.") && !isWhitelisted(p.name)) return false;
-
-      return true;
+      return p.userInstalled === true;
     },
   );
 
@@ -639,5 +566,6 @@ export async function POST(request: Request) {
     discoveredCount,
     serverlessCount,
     marketplaceCount,
+    connectApiBlocked,
   });
 }

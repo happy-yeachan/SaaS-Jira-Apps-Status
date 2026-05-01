@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Cloud,
   Download,
+  Info,
   Loader2,
   Search,
   Store,
@@ -55,6 +56,7 @@ interface FetchResult {
   discoveredCount: number;
   serverlessCount: number;
   marketplaceCount: number;
+  connectApiBlocked: boolean;
 }
 
 type Step = "form" | "results";
@@ -174,6 +176,7 @@ export function JiraImportDialog({
     onOpenChange(nextOpen);
   };
 
+
   const handleFetch = async () => {
     // Reveal validation errors on all fields before attempting the fetch
     setTouched({ domain: true, email: true, token: true });
@@ -200,6 +203,7 @@ export function JiraImportDialog({
         discoveredCount?: number;
         serverlessCount?: number;
         marketplaceCount?: number;
+        connectApiBlocked?: boolean;
         error?: string;
       };
 
@@ -225,6 +229,7 @@ export function JiraImportDialog({
         discoveredCount: data.discoveredCount ?? 0,
         serverlessCount: data.serverlessCount ?? 0,
         marketplaceCount: data.marketplaceCount ?? 0,
+        connectApiBlocked: data.connectApiBlocked ?? false,
       });
       setStep("results");
     } catch (err) {
@@ -275,11 +280,13 @@ export function JiraImportDialog({
         {/* Header */}
         <DialogHeader className="border-b px-4 py-3">
           <DialogTitle className="text-sm font-semibold">
-            {step === "form" ? "Import from Jira" : `Found ${result?.total ?? 0} installed apps`}
+            {step === "form"
+              ? "Import from Jira"
+              : `Found ${result?.total ?? 0} installed apps`}
           </DialogTitle>
           <DialogDescription className="text-xs">
             {step === "form"
-              ? "Securely fetch your Jira-installed apps. Status pages are auto-discovered for unmapped vendors."
+              ? "Jira 관리자 이메일과 API 토큰으로 설치된 앱을 가져옵니다."
               : [
                   result?.marketplaceCount
                     ? `${result.marketplaceCount} on marketplace`
@@ -314,12 +321,9 @@ export function JiraImportDialog({
         {step === "form" && (
           <>
             <div className="space-y-4 px-4 py-4">
-              {/* Jira Site URL — https:// is fixed; user only types the domain */}
+              {/* Jira Site URL */}
               <div className="space-y-1.5">
-                <label
-                  htmlFor="jira-domain"
-                  className="text-xs font-medium leading-none"
-                >
+                <label htmlFor="jira-domain" className="text-xs font-medium leading-none">
                   Jira Site URL
                 </label>
                 <InputGroup>
@@ -334,7 +338,6 @@ export function JiraImportDialog({
                     aria-invalid={(domainError ?? fieldErrors.domain) ? true : undefined}
                     onChange={(e) => {
                       let val = e.target.value;
-                      // Strip protocol if user pastes a full URL
                       if (val.startsWith("https://")) val = val.slice(8);
                       if (val.startsWith("http://")) val = val.slice(7);
                       setDomainSuffix(val);
@@ -351,10 +354,7 @@ export function JiraImportDialog({
 
               {/* Email */}
               <div className="space-y-1.5">
-                <label
-                  htmlFor="jira-email"
-                  className="text-xs font-medium leading-none"
-                >
+                <label htmlFor="jira-email" className="text-xs font-medium leading-none">
                   Admin Email
                 </label>
                 <Input
@@ -378,10 +378,7 @@ export function JiraImportDialog({
               {/* API Token */}
               <div className="space-y-1.5">
                 <div className="flex items-baseline justify-between">
-                  <label
-                    htmlFor="jira-token"
-                    className="text-xs font-medium leading-none"
-                  >
+                  <label htmlFor="jira-token" className="text-xs font-medium leading-none">
                     API Token
                   </label>
                   <a
@@ -405,9 +402,7 @@ export function JiraImportDialog({
                   }}
                   onBlur={() => setTouched((p) => ({ ...p, token: true }))}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && isFormValid && !isLoading) {
-                      void handleFetch();
-                    }
+                    if (e.key === "Enter" && isFormValid && !isLoading) void handleFetch();
                   }}
                   className="h-8 text-sm"
                 />
@@ -416,7 +411,6 @@ export function JiraImportDialog({
                 )}
               </div>
 
-              {/* General error — for errors that don't map to a specific field */}
               {fieldErrors.general && (
                 <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950 dark:text-red-300">
                   {fieldErrors.general}
@@ -424,7 +418,6 @@ export function JiraImportDialog({
               )}
             </div>
 
-            {/* Form footer */}
             <div className="flex flex-col gap-2 border-t bg-muted/30 px-4 py-3">
               <Button
                 size="sm"
@@ -437,13 +430,15 @@ export function JiraImportDialog({
                 ) : (
                   <Download className="h-3.5 w-3.5" />
                 )}
-                {isLoading
-                  ? "Fetching & discovering status pages…"
-                  : "Fetch Installed Apps"}
+                {isLoading ? "Fetching & discovering status pages…" : "Fetch Installed Apps"}
               </Button>
-              <p className="text-center text-[10px] text-muted-foreground">
-                Credentials are used for this request only and are never stored.
-              </p>
+
+              <div className="flex items-start gap-1.5 rounded-md bg-blue-50 px-2.5 py-2 dark:bg-blue-950/40">
+                <Info className="mt-0.5 h-3 w-3 shrink-0 text-blue-500" />
+                <p className="text-[10px] leading-relaxed text-blue-700 dark:text-blue-300">
+                  자격 증명은 이 요청에만 사용되며 저장되지 않습니다.
+                </p>
+              </div>
             </div>
           </>
         )}
@@ -451,6 +446,21 @@ export function JiraImportDialog({
         {/* ── Step 2: Results list ────────────────────────────────────── */}
         {step === "results" && (
           <>
+            {/* Connect API info — always blocked with API tokens (Atlassian platform limitation) */}
+            {result?.connectApiBlocked && (
+              <div className="flex items-start gap-2 border-b bg-blue-50 px-4 py-3 dark:bg-blue-950/30">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
+                <div className="space-y-0.5">
+                  <p className="text-xs font-medium text-blue-800 dark:text-blue-300">
+                    ScriptRunner, Tempo 등 Connect 앱은 미포함
+                  </p>
+                  <p className="text-[11px] text-blue-700 dark:text-blue-400">
+                    Atlassian의 정책으로 API 토큰으로는 Connect 앱 목록을 가져올 수 없습니다 (권한과 무관).
+                    OSGi 플러그인만 가져왔습니다.
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="max-h-[480px] min-h-[120px] overflow-y-auto">
               {newApps.length === 0 && alreadyAddedCount > 0 ? (
                 <p className="px-4 py-10 text-center text-xs text-muted-foreground">
@@ -518,10 +528,7 @@ export function JiraImportDialog({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => {
-                  setStep("form");
-                  setError(null);
-                }}
+                onClick={() => setStep("form")}
               >
                 <ArrowLeft className="h-3.5 w-3.5" />
                 Back
