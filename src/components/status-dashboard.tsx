@@ -282,29 +282,35 @@ function AppRow({
   const statusPageUrl = toStatusPageUrl(app.statusUrl);
   return (
     <TableRow className={cn("group/row", dimmed && "opacity-50")}>
-      <TableCell>
-        <div className="flex items-center gap-2.5">
-          <AppLogo src={app.logoUrl} alt={app.appName} className="h-8 w-8" />
+      {/* App — truncates to fill remaining space */}
+      <TableCell className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <AppLogo src={app.logoUrl} alt={app.appName} className="h-8 w-8 shrink-0" />
           {statusPageUrl ? (
             <a
               href={statusPageUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="group/link flex items-center gap-1 text-sm font-medium leading-tight transition-colors hover:text-blue-600"
+              className="group/link flex min-w-0 items-center gap-1 text-sm font-medium leading-tight transition-colors hover:text-blue-600"
             >
-              {app.appName}
+              <span className="truncate">{app.appName}</span>
               <ExternalLink className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/link:opacity-100" />
             </a>
           ) : (
-            <span className="text-sm font-medium leading-tight">{app.appName}</span>
+            <span className="truncate text-sm font-medium leading-tight">{app.appName}</span>
           )}
         </div>
       </TableCell>
-      <TableCell className="text-sm text-muted-foreground">{app.vendorName}</TableCell>
+      {/* Vendor — visible from md */}
+      <TableCell className="hidden md:table-cell">
+        <span className="block truncate text-sm text-muted-foreground">{app.vendorName}</span>
+      </TableCell>
+      {/* Status */}
       <TableCell>
         <StatusCell result={result} isUnconfigured={!app.statusUrl} />
       </TableCell>
-      <TableCell>
+      {/* History — visible from lg */}
+      <TableCell className="hidden lg:table-cell">
         <div className="flex items-center gap-3">
           <HeartbeatBars history={history} />
           {pct !== null && (
@@ -314,17 +320,20 @@ function AppRow({
           )}
         </div>
       </TableCell>
-      <TableCell className="tabular-nums text-sm text-muted-foreground">
+      {/* Response — visible from lg */}
+      <TableCell className="hidden lg:table-cell tabular-nums text-sm text-muted-foreground">
         {result?.responseTimeMs != null ? `${result.responseTimeMs} ms` : "—"}
       </TableCell>
-      <TableCell className="text-xs text-muted-foreground">
+      {/* Checked — visible from xl */}
+      <TableCell className="hidden xl:table-cell text-xs text-muted-foreground">
         {result?.checkedAt ? new Date(result.checkedAt).toLocaleTimeString() : "—"}
       </TableCell>
-      <TableCell>
+      {/* Delete — always visible, faint until hover */}
+      <TableCell className="w-12 text-right">
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 opacity-0 transition-opacity group-hover/row:opacity-100"
+          className="h-7 w-7 opacity-40 transition-opacity group-hover/row:opacity-100"
           onClick={() => onDelete(app.id)}
           aria-label={`Remove ${app.appName}`}
         >
@@ -760,52 +769,59 @@ export function StatusDashboard() {
             </div>
           ) : (
             <div className="rounded-lg border bg-card">
-              <Table>
+              <Table className="w-full table-fixed">
                 <TableHeader>
                   <TableRow>
+                    {/* App — takes all remaining space */}
                     <SortableHead
                       label="App"
                       sortKey="appName"
                       active={sortKey}
                       dir={sortDir}
                       onSort={handleSort}
-                      className="min-w-[200px]"
                     />
+                    {/* Vendor — md+ */}
                     <SortableHead
                       label="Vendor"
                       sortKey="vendorName"
                       active={sortKey}
                       dir={sortDir}
                       onSort={handleSort}
+                      className="hidden md:table-cell w-[18%]"
                     />
+                    {/* Status */}
                     <SortableHead
                       label="Status"
                       sortKey="status"
                       active={sortKey}
                       dir={sortDir}
                       onSort={handleSort}
-                      className="w-[180px]"
+                      className="w-36"
                     />
-                    <TableHead className="min-w-[220px]">
+                    {/* History — lg+ */}
+                    <TableHead className="hidden lg:table-cell w-[200px]">
                       History (last {BAR_COUNT})
                     </TableHead>
+                    {/* Response — lg+ */}
                     <SortableHead
                       label="Response"
                       sortKey="responseTimeMs"
                       active={sortKey}
                       dir={sortDir}
                       onSort={handleSort}
-                      className="w-[100px]"
+                      className="hidden lg:table-cell w-24"
                     />
+                    {/* Checked — xl+ */}
                     <SortableHead
                       label="Checked"
                       sortKey="checkedAt"
                       active={sortKey}
                       dir={sortDir}
                       onSort={handleSort}
-                      className="w-[120px]"
+                      className="hidden xl:table-cell w-24"
                     />
-                    <TableHead className="w-[52px]" />
+                    {/* Delete */}
+                    <TableHead className="w-12" />
                   </TableRow>
                 </TableHeader>
 
