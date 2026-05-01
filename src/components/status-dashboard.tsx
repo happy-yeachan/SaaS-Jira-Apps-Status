@@ -737,7 +737,8 @@ export function StatusDashboard() {
           </Button>
           {isMounted && apps.length > 0 && (
             <Tooltip>
-              <TooltipTrigger>
+              {/* render=<span> avoids <button> inside <button> — base-ui Trigger defaults to <button> */}
+              <TooltipTrigger render={<span className="inline-flex" />}>
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleExport}>
                   <Download className="h-3.5 w-3.5" />
                 </Button>
