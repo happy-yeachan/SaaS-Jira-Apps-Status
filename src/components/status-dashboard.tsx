@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -9,18 +9,29 @@ import {
   ChevronUp,
   ChevronsUpDown,
   CircleDashed,
+  Download,
   ExternalLink,
   LayoutGrid,
   PlusCircle,
   RefreshCw,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import { AddAppDialog } from "@/components/add-app-dialog";
 import { AppLogo } from "@/components/app-logo";
 import { QuickSetupDialog } from "@/components/quick-setup-dialog";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -51,6 +62,13 @@ const HISTORY_MAX = 30;
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
 const BAR_COUNT = 30;
 
+interface StatusToast {
+  id: string;
+  appName: string;
+  from: AppHealthStatus;
+  to: AppHealthStatus;
+}
+
 const STATUS_PRIORITY: Record<AppHealthStatus, number> = {
   outage: 0,
   degraded: 1,
@@ -80,7 +98,7 @@ function uptimePct(history: PingRecord[]): number | null {
 // ── Heartbeat bars ─────────────────────────────────────────────────────────────
 // Uses native `title` tooltip to avoid nested-interactive-element issues.
 
-function HeartbeatBars({ history }: { history: PingRecord[] }) {
+const HeartbeatBars = memo(function HeartbeatBars({ history }: { history: PingRecord[] }) {
   const slots = useMemo(() => {
     const filled = history.slice(-BAR_COUNT);
     const emptyCount = BAR_COUNT - filled.length;
@@ -123,7 +141,7 @@ function HeartbeatBars({ history }: { history: PingRecord[] }) {
       })}
     </div>
   );
-}
+});
 
 // ── Status indicator cell ──────────────────────────────────────────────────────
 
@@ -258,7 +276,7 @@ function SortableHead({
 
 // ── App table row ──────────────────────────────────────────────────────────────
 
-function AppRow({
+const AppRow = memo(function AppRow({
   app,
   result,
   history,
@@ -268,7 +286,7 @@ function AppRow({
   app: RegisteredApp;
   result: HealthCheckResult | undefined;
   history: PingRecord[];
-  onDelete: (id: string) => void;
+  onDelete: (app: RegisteredApp) => void;
   dimmed?: boolean;
 }) {
   const pct = uptimePct(history);
@@ -327,7 +345,7 @@ function AppRow({
           variant="ghost"
           size="icon"
           className="h-7 w-7 opacity-40 transition-opacity group-hover/row:opacity-100"
-          onClick={() => onDelete(app.id)}
+          onClick={() => onDelete(app)}
           aria-label={`Remove ${app.appName}`}
         >
           <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
@@ -335,7 +353,7 @@ function AppRow({
       </TableCell>
     </TableRow>
   );
-}
+});
 
 // ── Main dashboard ─────────────────────────────────────────────────────────────
 
@@ -378,6 +396,9 @@ export function StatusDashboard() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [quickSetupOpen, setQuickSetupOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<RegisteredApp | null>(null);
+  const [toasts, setToasts] = useState<StatusToast[]>([]);
+  const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
 
   // Use a ref so async callbacks always read the latest apps value
   const appsRef = useRef(apps);
@@ -396,8 +417,29 @@ export function StatusDashboard() {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(historyById));
   }, [historyById]);
 
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const addToast = useCallback(
+    (appName: string, from: AppHealthStatus, to: AppHealthStatus) => {
+      const id = Math.random().toString(36).slice(2, 9);
+      setToasts((prev) => [...prev.slice(-4), { id, appName, from, to }]);
+      setTimeout(() => dismissToast(id), 6000);
+    },
+    [dismissToast],
+  );
+
   // ── Health checks ──────────────────────────────────────────────────────────
-  const applyResults = (results: HealthCheckResult[]) => {
+  const applyResults = useCallback((results: HealthCheckResult[], prevById: Record<string, HealthCheckResult>) => {
+    // Detect status degradations → show toast
+    for (const r of results) {
+      const prev = prevById[r.appId];
+      if (prev && prev.status !== r.status) {
+        const appName = appsRef.current.find((a) => a.id === r.appId)?.appName ?? r.appId;
+        addToast(appName, prev.status, r.status);
+      }
+    }
     setLatestById((prev) => ({
       ...prev,
       ...Object.fromEntries(results.map((r) => [r.appId, r])),
@@ -415,7 +457,10 @@ export function StatusDashboard() {
       }
       return next;
     });
-  };
+  }, [addToast]);
+
+  const latestByIdRef = useRef<Record<string, HealthCheckResult>>({});
+  useEffect(() => { latestByIdRef.current = latestById; }, [latestById]);
 
   const checkAllStatuses = async () => {
     const appsList = appsRef.current;
@@ -430,9 +475,9 @@ export function StatusDashboard() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as HealthCheckResponse;
-      applyResults(data.results);
+      applyResults(data.results, latestByIdRef.current);
+      setLastCheckedAt(new Date());
     } catch {
-      // Mark checkable apps as outage so the table reflects the failure
       setLatestById((prev) => {
         const next = { ...prev };
         for (const app of checkableApps) {
@@ -520,7 +565,7 @@ export function StatusDashboard() {
       })
         .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
         .then((data) => {
-          if (data?.results?.[0]) applyResults(data.results);
+          if (data?.results?.[0]) applyResults(data.results, latestByIdRef.current);
         })
         .catch(() => undefined);
     }
@@ -548,16 +593,33 @@ export function StatusDashboard() {
         body: JSON.stringify({ apps: checkableApps }),
       })
         .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
-        .then((data) => { if (data?.results) applyResults(data.results); })
+        .then((data) => { if (data?.results) applyResults(data.results, latestByIdRef.current); })
         .catch(() => undefined);
     }
   };
 
-  const handleDeleteApp = (appId: string) => {
+  const handleDeleteApp = useCallback((appId: string) => {
     setApps((prev) => prev.filter((a) => a.id !== appId));
     setLatestById((prev) => { const n = { ...prev }; delete n[appId]; return n; });
     setHistoryById((prev) => { const n = { ...prev }; delete n[appId]; return n; });
-  };
+  }, []);
+
+  const handleRequestDelete = useCallback((app: RegisteredApp) => {
+    setDeleteTarget(app);
+  }, []);
+
+  const handleExport = useCallback(() => {
+    const blob = new Blob(
+      [JSON.stringify({ exportedAt: new Date().toISOString(), apps }, null, 2)],
+      { type: "application/json" },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `jira-apps-status-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [apps]);
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const existingIds = useMemo(() => new Set(apps.map((a) => a.id)), [apps]);
@@ -617,6 +679,37 @@ export function StatusDashboard() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <main className="mx-auto w-full max-w-7xl px-6 py-8">
+      {/* Toast container */}
+      <div className="fixed right-4 top-4 z-50 flex flex-col gap-2 pointer-events-none">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className="pointer-events-auto flex items-center gap-2.5 rounded-lg border bg-card px-3 py-2.5 shadow-lg text-sm"
+          >
+            {toast.to === "operational" ? (
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+            ) : toast.to === "degraded" ? (
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+            ) : (
+              <AlertTriangle className="h-4 w-4 shrink-0 text-red-500" />
+            )}
+            <div className="min-w-0">
+              <span className="font-medium">{toast.appName}</span>
+              <span className="ml-1.5 text-muted-foreground capitalize">
+                {toast.from} → {toast.to}
+              </span>
+            </div>
+            <button
+              onClick={() => dismissToast(toast.id)}
+              className="ml-1 shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
       {/* Header */}
       <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -625,6 +718,11 @@ export function StatusDashboard() {
           </h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
             Real-time service health for Jira &amp; Confluence third-party apps.
+            {lastCheckedAt && (
+              <span className="ml-2 text-xs">
+                · Last checked {lastCheckedAt.toLocaleTimeString()}
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -637,6 +735,17 @@ export function StatusDashboard() {
             <RefreshCw className={cn("h-3.5 w-3.5", isChecking && "animate-spin")} />
             Refresh
           </Button>
+          {isMounted && apps.length > 0 && (
+            <Tooltip>
+              <TooltipTrigger>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleExport}>
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Export app list</TooltipContent>
+            </Tooltip>
+          )}
+          <div className="h-4 w-px bg-border" />
           <Button
             variant="outline"
             size="sm"
@@ -649,6 +758,8 @@ export function StatusDashboard() {
             <PlusCircle className="h-3.5 w-3.5" />
             Add App
           </Button>
+          <div className="h-4 w-px bg-border" />
+          <ThemeToggle />
         </div>
       </div>
 
@@ -690,17 +801,17 @@ export function StatusDashboard() {
         <>
           {/* Summary bar */}
           <div className="mb-4 flex flex-wrap items-center gap-2">
-            <Badge className="gap-1.5 bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+            <Badge className="gap-1.5 bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/30">
               <CheckCircle2 className="h-3 w-3" />
               Operational
               <span className="ml-0.5 font-bold">{summary.operational}</span>
             </Badge>
-            <Badge className="gap-1.5 bg-amber-100 text-amber-800 hover:bg-amber-100">
+            <Badge className="gap-1.5 bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/30">
               <CircleDashed className="h-3 w-3" />
               Degraded
               <span className="ml-0.5 font-bold">{summary.degraded}</span>
             </Badge>
-            <Badge className="gap-1.5 bg-red-100 text-red-800 hover:bg-red-100">
+            <Badge className="gap-1.5 bg-red-100 text-red-800 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/30">
               <AlertTriangle className="h-3 w-3" />
               Outage
               <span className="ml-0.5 font-bold">{summary.outage}</span>
@@ -794,7 +905,7 @@ export function StatusDashboard() {
                       app={app}
                       result={latestById[app.id]}
                       history={historyById[app.id] ?? []}
-                      onDelete={handleDeleteApp}
+                      onDelete={handleRequestDelete}
                     />
                   ))}
 
@@ -803,7 +914,16 @@ export function StatusDashboard() {
                     <>
                       <TableRow
                         className="cursor-pointer select-none hover:bg-muted/40 border-t-2"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setUnconfiguredOpen((o) => !o)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setUnconfiguredOpen((o) => !o);
+                          }
+                        }}
+                        aria-expanded={unconfiguredOpen}
                       >
                         <TableCell colSpan={7} className="py-2.5">
                           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -827,7 +947,7 @@ export function StatusDashboard() {
                             app={app}
                             result={latestById[app.id]}
                             history={historyById[app.id] ?? []}
-                            onDelete={handleDeleteApp}
+                            onDelete={handleRequestDelete}
                             dimmed
                           />
                         ))}
@@ -850,6 +970,35 @@ export function StatusDashboard() {
             onBulkAddApps={handleBulkAddApps}
             existingIds={existingIds}
           />
+
+          {/* Delete confirmation */}
+          <Dialog open={!!deleteTarget} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+            <DialogContent className="sm:max-w-sm">
+              <DialogHeader>
+                <DialogTitle>Remove app</DialogTitle>
+                <DialogDescription>
+                  Remove <span className="font-medium text-foreground">{deleteTarget?.appName}</span> from your dashboard? This also clears its history.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" size="sm" onClick={() => setDeleteTarget(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    if (deleteTarget) {
+                      handleDeleteApp(deleteTarget.id);
+                      setDeleteTarget(null);
+                    }
+                  }}
+                >
+                  Remove
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </main>

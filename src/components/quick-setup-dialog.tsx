@@ -74,7 +74,21 @@ export function QuickSetupDialog({
   const fetchedRef = useRef(false);
 
   useEffect(() => {
-    if (!open || fetchedRef.current) return;
+    if (!open) return;
+
+    // Reset selection every time the dialog opens
+    if (fetchedRef.current && apps.length > 0) {
+      setSelected(
+        new Set(
+          apps
+            .filter((a) => a.statusUrl !== "" && !existingIds.has(a.id))
+            .map((a) => a.id),
+        ),
+      );
+      return;
+    }
+
+    // First open: fetch from API
     fetchedRef.current = true;
     setLoading(true);
     setError(false);
@@ -86,13 +100,13 @@ export function QuickSetupDialog({
       })
       .then(({ apps: fetched }) => {
         setApps(fetched);
-        // Pre-select apps that have a known status URL and are not already added
-        const preSelected = new Set(
-          fetched
-            .filter((a) => a.statusUrl !== "" && !existingIds.has(a.id))
-            .map((a) => a.id),
+        setSelected(
+          new Set(
+            fetched
+              .filter((a) => a.statusUrl !== "" && !existingIds.has(a.id))
+              .map((a) => a.id),
+          ),
         );
-        setSelected(preSelected);
       })
       .catch(() => setError(true))
       .finally(() => setLoading(false));
