@@ -86,7 +86,6 @@ export async function POST(request: Request) {
 
   const authHeader = `Basic ${Buffer.from(`${email}:${apiToken}`).toString("base64")}`;
   const apiBase = jiraDomain;
-  console.log(`[jira/import] Basic Auth | domain=${jiraDomain}`);
 
   // ── Call UPM API (paginated) ─────────────────────────────────────────────
   const upmHeaders = {
@@ -148,7 +147,6 @@ export async function POST(request: Request) {
     }
   }
 
-  console.log(`[jira/import] UPM plugins (all pages): ${allPlugins.length}`);
 
   // ── Also fetch Atlassian Connect add-ons ─────────────────────────────────
   // The UPM endpoint (/rest/plugins/1.0/) only returns OSGi-bundled plugins.
@@ -235,7 +233,6 @@ export async function POST(request: Request) {
     }
   }
 
-  console.log(`[jira/import] Connect add-ons merged: ${connectTotal} (total combined: ${allPlugins.length})`);
 
   // ── Inclusion criteria ────────────────────────────────────────────────────
   // The UPM API (with Accept: application/vnd.atl.plugins.installed+json) marks
@@ -249,7 +246,6 @@ export async function POST(request: Request) {
     },
   );
 
-  console.log(`[jira/import] after filter: ${userPlugins.length} / ${allPlugins.length} kept`);
 
   // ── Per-plugin resolver (logo + status) ─────────────────────────────────
   // Each plugin needs two things resolved asynchronously:
@@ -418,9 +414,6 @@ export async function POST(request: Request) {
       isTempoStatusUrl(knownStatus.statusUrl) &&
       isTempoBlockedByAppName(appName)
     ) {
-      console.log(
-        `[import] Dropping resolveStatusUrl Tempo match for app="${appName}" (flexible/osci guard)`,
-      );
       knownStatus = null;
     }
 

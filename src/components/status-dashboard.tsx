@@ -486,21 +486,9 @@ export function StatusDashboard() {
   };
 
   const handleDeleteApp = (appId: string) => {
-    // Write to localStorage INSIDE the state updater so the deletion is
-    // persisted atomically with the state change.  The separate persist
-    // useEffects will also fire afterward as an idempotent backup.
-    setApps((prev) => {
-      const updated = prev.filter((a) => a.id !== appId);
-      localStorage.setItem(APPS_KEY, JSON.stringify(updated));
-      return updated;
-    });
+    setApps((prev) => prev.filter((a) => a.id !== appId));
     setLatestById((prev) => { const n = { ...prev }; delete n[appId]; return n; });
-    setHistoryById((prev) => {
-      const n = { ...prev };
-      delete n[appId];
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(n));
-      return n;
-    });
+    setHistoryById((prev) => { const n = { ...prev }; delete n[appId]; return n; });
   };
 
   // ── Derived ────────────────────────────────────────────────────────────────

@@ -465,8 +465,6 @@ async function checkAppHealth(app: RegisteredApp): Promise<HealthCheckResult> {
 
     const responseTimeMs = Date.now() - start;
 
-    console.log(`[FETCH HTTP] "${app.appName}" | ${response.status} ${response.statusText} | ${responseTimeMs}ms`);
-
     // ── http_ping ──────────────────────────────────────────────────────────
     if (app.checkType === "http_ping") {
       return {
@@ -514,17 +512,16 @@ async function checkAppHealth(app: RegisteredApp): Promise<HealthCheckResult> {
       // from the payload shape — no URL heuristic needed.
       const { status, message } = extractAnyStatus(app.appName, payload);
 
-      console.log(`[FINAL STATUS] "${app.appName}" → ${status} ("${message}")`);
       return { appId: app.id, status, checkedAt: new Date().toISOString(), responseTimeMs, message };
     }
 
-    // ── custom / fallback ──────────────────────────────────────────────────
+    // ── custom / fallback — treat as plain HTTP ping ───────────────────────
     return {
       appId:         app.id,
-      status:        response.ok ? "degraded" : "outage",
+      status:        response.ok ? "operational" : "outage",
       checkedAt:     new Date().toISOString(),
       responseTimeMs,
-      message:       "Custom checker — no status logic defined for this app.",
+      message:       response.ok ? `HTTP ${response.status}` : `HTTP error: ${response.status}`,
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
