@@ -363,9 +363,33 @@ export async function POST(request: Request) {
       return result;
     };
 
-    // Forge / Ecosystem serverless: ARI or URN app keys — shared infra status
+    const normalizedKey = normalizeVendorName(rawVendor);
+
+    // Forge / Ecosystem serverless: ARI or URN app keys.
+    // Prefer the vendor's own status page when one is known — some known vendors
+    // (e.g. Appfire) publish Forge apps but have their own status infrastructure.
+    // Fall back to the shared Atlassian developer platform page only when no
+    // vendor-specific page exists.
     if (isForgeServerlessKey(plugin.key)) {
+      const vendorStatus = !VENDOR_BLACKLIST.has(normalizedKey)
+        ? resolveStatusUrl(appName, normalizedKey)
+        : null;
+      const effectiveVendorStatus =
+        vendorStatus &&
+        isTempoStatusUrl(vendorStatus.statusUrl) &&
+        isTempoBlockedByAppName(appName)
+          ? null
+          : vendorStatus;
+
       const { logoUrl } = await resolvePluginLogo(plugin);
+      if (effectiveVendorStatus) {
+        return logMapCheck({
+          logoUrl,
+          statusUrl: effectiveVendorStatus.statusUrl,
+          checkType: effectiveVendorStatus.checkType,
+          statusSource: "map",
+        });
+      }
       return logMapCheck({
         logoUrl,
         statusUrl: FORGE_DEVELOPER_STATUS_URL,
@@ -373,8 +397,6 @@ export async function POST(request: Request) {
         statusSource: "serverless",
       });
     }
-
-    const normalizedKey = normalizeVendorName(rawVendor);
 
     // ── Priority 1: Blacklist — vendor has no public status page ─────────────
     if (VENDOR_BLACKLIST.has(normalizedKey)) {
@@ -436,15 +458,23 @@ export async function POST(request: Request) {
     });
   }
 
-  // Process in batches of 5 — each slot may make up to ~13 outbound requests
-  // (1 Marketplace CDN + up to 12 status-page probes) so we keep concurrency low.
-  const BATCH_SIZE = 5;
-  const resolutions: PluginResolution[] = [];
-  for (let i = 0; i < userPlugins.length; i += BATCH_SIZE) {
-    const batch = userPlugins.slice(i, i + BATCH_SIZE);
-    const batchResults = await Promise.all(batch.map(resolvePlugin));
-    resolutions.push(...batchResults);
+  // Sliding-window concurrency pool — keeps CONCURRENCY slots active at all times.
+  // Map-hit plugins finish quickly and immediately pick up the next slot; only
+  // discovery plugins (12 parallel probes, 2 s timeout each) hold a slot longer.
+  // This is faster than a fixed batch loop where fast plugins idle while waiting
+  // for the slowest task in their batch to complete.
+  const CONCURRENCY = 15;
+  const resolutions: PluginResolution[] = new Array(userPlugins.length);
+  let nextPluginIdx = 0;
+  async function runWorker(): Promise<void> {
+    while (nextPluginIdx < userPlugins.length) {
+      const idx = nextPluginIdx++;
+      resolutions[idx] = await resolvePlugin(userPlugins[idx]!);
+    }
   }
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, userPlugins.length) }, runWorker),
+  );
 
   // ── Build final app objects ───────────────────────────────────────────────
   // statusSource is included in the response so the dialog can show per-app
