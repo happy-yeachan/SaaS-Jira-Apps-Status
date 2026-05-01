@@ -26,7 +26,8 @@
  */
 
 import { NextResponse } from "next/server";
-import { resolveStatusUrl, type MarketplaceSearchItem } from "@/types";
+import { resolveStatusUrl, VENDOR_BLACKLIST, type MarketplaceSearchItem } from "@/types";
+import { normalizeVendorName } from "@/lib/status-discovery";
 
 const MARKETPLACE_BASE = "https://marketplace.atlassian.com";
 
@@ -89,8 +90,11 @@ function parseAddons(payload: unknown): MarketplaceSearchItem[] {
       ? `https://marketplace.atlassian.com/product-listing/files/${assetId}?width=72&height=72`
       : undefined;
 
-    // Resolve status URL server-side — product keyword checked before vendor fallback
-    const statusConfig = resolveStatusUrl(addon.name, vendorName);
+    // Resolve status URL server-side — skip if vendor is explicitly blacklisted
+    const normalizedVendor = normalizeVendorName(vendorName);
+    const statusConfig = VENDOR_BLACKLIST.has(normalizedVendor)
+      ? null
+      : resolveStatusUrl(addon.name, normalizedVendor);
 
     return [
       {

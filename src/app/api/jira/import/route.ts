@@ -335,7 +335,12 @@ export async function POST(request: Request) {
    */
   function isTempoBlockedByAppName(appName: string): boolean {
     const n = appName.toLowerCase();
-    return n.includes("flexible") || n.includes("osci");
+    return (
+      n.includes("flexible") ||
+      n.includes("osci") ||
+      n.includes("sumup") ||
+      n.includes("structure")
+    );
   }
 
   async function resolvePlugin(

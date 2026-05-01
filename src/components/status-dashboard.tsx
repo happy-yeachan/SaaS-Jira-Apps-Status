@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   ChevronsUpDown,
   CircleDashed,
@@ -41,7 +42,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { resolveStatusUrl } from "@/types";
+import { resolveStatusUrl, VENDOR_BLACKLIST } from "@/types";
+import { normalizeVendorName } from "@/lib/status-discovery";
 import type {
   AppHealthStatus,
   HealthCheckResponse,
@@ -261,6 +263,78 @@ function SortableHead({
   );
 }
 
+// ── App table row ──────────────────────────────────────────────────────────────
+
+function AppRow({
+  app,
+  result,
+  history,
+  onDelete,
+  dimmed = false,
+}: {
+  app: RegisteredApp;
+  result: HealthCheckResult | undefined;
+  history: PingRecord[];
+  onDelete: (id: string) => void;
+  dimmed?: boolean;
+}) {
+  const pct = uptimePct(history);
+  const statusPageUrl = toStatusPageUrl(app.statusUrl);
+  return (
+    <TableRow className={cn("group/row", dimmed && "opacity-50")}>
+      <TableCell>
+        <div className="flex items-center gap-2.5">
+          <AppLogo src={app.logoUrl} alt={app.appName} className="h-8 w-8" />
+          {statusPageUrl ? (
+            <a
+              href={statusPageUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group/link flex items-center gap-1 text-sm font-medium leading-tight transition-colors hover:text-blue-600"
+            >
+              {app.appName}
+              <ExternalLink className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/link:opacity-100" />
+            </a>
+          ) : (
+            <span className="text-sm font-medium leading-tight">{app.appName}</span>
+          )}
+        </div>
+      </TableCell>
+      <TableCell className="text-sm text-muted-foreground">{app.vendorName}</TableCell>
+      <TableCell>
+        <StatusCell result={result} isUnconfigured={!app.statusUrl} />
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-3">
+          <HeartbeatBars history={history} />
+          {pct !== null && (
+            <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+              {pct}%
+            </span>
+          )}
+        </div>
+      </TableCell>
+      <TableCell className="tabular-nums text-sm text-muted-foreground">
+        {result?.responseTimeMs != null ? `${result.responseTimeMs} ms` : "—"}
+      </TableCell>
+      <TableCell className="text-xs text-muted-foreground">
+        {result?.checkedAt ? new Date(result.checkedAt).toLocaleTimeString() : "—"}
+      </TableCell>
+      <TableCell>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 opacity-0 transition-opacity group-hover/row:opacity-100"
+          onClick={() => onDelete(app.id)}
+          aria-label={`Remove ${app.appName}`}
+        >
+          <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+        </Button>
+      </TableCell>
+    </TableRow>
+  );
+}
+
 // ── Main dashboard ─────────────────────────────────────────────────────────────
 
 export function StatusDashboard() {
@@ -399,14 +473,23 @@ export function StatusDashboard() {
     setApps((prev) => {
       let changed = false;
       const migrated = prev.map((app) => {
-        const resolved = resolveStatusUrl(app.appName, app.vendorName);
+        const normalizedVendor = normalizeVendorName(app.vendorName);
+
+        // Blacklisted vendors must have no status URL. If a previous bug assigned
+        // one (e.g. PRODUCT_RULES "structure" keyword matching an OSCI app), clear it.
+        if (VENDOR_BLACKLIST.has(normalizedVendor)) {
+          if (app.statusUrl !== "" || app.checkType !== "custom") {
+            changed = true;
+            return { ...app, statusUrl: "", checkType: "custom" as const };
+          }
+          return app;
+        }
+
+        const resolved = resolveStatusUrl(app.appName, normalizedVendor);
         if (
           resolved &&
           (resolved.statusUrl !== app.statusUrl || resolved.checkType !== app.checkType)
         ) {
-          console.log(
-            `[migrate] "${app.appName}" statusUrl: ${app.statusUrl} → ${resolved.statusUrl}`,
-          );
           changed = true;
           return { ...app, statusUrl: resolved.statusUrl, checkType: resolved.checkType };
         }
@@ -503,8 +586,10 @@ export function StatusDashboard() {
     };
   }, [latestById]);
 
-  const sortedApps = useMemo(() => {
-    return [...apps].sort((a, b) => {
+  const [unconfiguredOpen, setUnconfiguredOpen] = useState(false);
+
+  const { monitoredApps, unconfiguredApps } = useMemo(() => {
+    const sorted = [...apps].sort((a, b) => {
       let cmp = 0;
       switch (sortKey) {
         case "appName":
@@ -538,6 +623,10 @@ export function StatusDashboard() {
       }
       return sortDir === "asc" ? cmp : -cmp;
     });
+    return {
+      monitoredApps: sorted.filter((a) => a.statusUrl),
+      unconfiguredApps: sorted.filter((a) => !a.statusUrl),
+    };
   }, [apps, latestById, sortKey, sortDir]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -564,7 +653,7 @@ export function StatusDashboard() {
             Refresh
           </Button>
           <Select
-            value={refreshInterval === null ? "off" : String(refreshInterval)}
+            value={isMounted ? (refreshInterval === null ? "off" : String(refreshInterval)) : "off"}
             onValueChange={(v) => setRefreshInterval(v === "off" ? null : Number(v))}
           >
             <SelectTrigger className="h-8 w-[112px] text-xs">
@@ -721,93 +810,51 @@ export function StatusDashboard() {
                 </TableHeader>
 
                 <TableBody>
-                  {sortedApps.map((app) => {
-                    const result = latestById[app.id];
-                    const history = historyById[app.id] ?? [];
-                    const pct = uptimePct(history);
+                  {monitoredApps.map((app) => (
+                    <AppRow
+                      key={app.id}
+                      app={app}
+                      result={latestById[app.id]}
+                      history={historyById[app.id] ?? []}
+                      onDelete={handleDeleteApp}
+                    />
+                  ))}
 
-                    return (
-                      <TableRow key={app.id} className="group/row">
-                        {/* App name + logo */}
-                        <TableCell>
-                          <div className="flex items-center gap-2.5">
-                            <AppLogo
-                              src={app.logoUrl}
-                              alt={app.appName}
-                              className="h-8 w-8"
+                  {/* Unconfigured apps — collapsed by default */}
+                  {unconfiguredApps.length > 0 && (
+                    <>
+                      <TableRow
+                        className="cursor-pointer select-none hover:bg-muted/40 border-t-2"
+                        onClick={() => setUnconfiguredOpen((o) => !o)}
+                      >
+                        <TableCell colSpan={7} className="py-2.5">
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <ChevronRight
+                              className={cn(
+                                "h-3.5 w-3.5 transition-transform duration-150",
+                                unconfiguredOpen && "rotate-90",
+                              )}
                             />
-                            {(() => {
-                              const statusPageUrl = toStatusPageUrl(app.statusUrl);
-                              return statusPageUrl ? (
-                                <a
-                                  href={statusPageUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="group/link flex items-center gap-1 text-sm font-medium leading-tight transition-colors hover:text-blue-600"
-                                >
-                                  {app.appName}
-                                  <ExternalLink className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/link:opacity-100" />
-                                </a>
-                              ) : (
-                                <span className="text-sm font-medium leading-tight">
-                                  {app.appName}
-                                </span>
-                              );
-                            })()}
+                            <span>No status page</span>
+                            <span className="rounded-full bg-muted px-1.5 py-0.5 font-medium tabular-nums">
+                              {unconfiguredApps.length}
+                            </span>
                           </div>
-                        </TableCell>
-
-                        {/* Vendor */}
-                        <TableCell className="text-sm text-muted-foreground">
-                          {app.vendorName}
-                        </TableCell>
-
-                        {/* Status */}
-                        <TableCell>
-                          <StatusCell result={result} isUnconfigured={!app.statusUrl} />
-                        </TableCell>
-
-                        {/* Heartbeat bars */}
-                        <TableCell>
-                          <div className="flex items-center gap-3">
-                            <HeartbeatBars history={history} />
-                            {pct !== null && (
-                              <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                                {pct}%
-                              </span>
-                            )}
-                          </div>
-                        </TableCell>
-
-                        {/* Response time */}
-                        <TableCell className="tabular-nums text-sm text-muted-foreground">
-                          {result?.responseTimeMs != null
-                            ? `${result.responseTimeMs} ms`
-                            : "—"}
-                        </TableCell>
-
-                        {/* Checked at */}
-                        <TableCell className="text-xs text-muted-foreground">
-                          {result?.checkedAt
-                            ? new Date(result.checkedAt).toLocaleTimeString()
-                            : "—"}
-                        </TableCell>
-
-                        {/* Delete */}
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 opacity-0 transition-opacity group-hover/row:opacity-100"
-                            onClick={() => handleDeleteApp(app.id)}
-                            aria-label={`Remove ${app.appName}`}
-                          >
-                            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                          </Button>
                         </TableCell>
                       </TableRow>
-                    );
-                  })}
+                      {unconfiguredOpen &&
+                        unconfiguredApps.map((app) => (
+                          <AppRow
+                            key={app.id}
+                            app={app}
+                            result={latestById[app.id]}
+                            history={historyById[app.id] ?? []}
+                            onDelete={handleDeleteApp}
+                            dimmed
+                          />
+                        ))}
+                    </>
+                  )}
                 </TableBody>
               </Table>
             </div>
