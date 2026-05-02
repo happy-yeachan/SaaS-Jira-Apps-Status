@@ -12,6 +12,7 @@ import {
   Download,
   ExternalLink,
   LayoutGrid,
+  Loader2,
   PlusCircle,
   RefreshCw,
   Sparkles,
@@ -148,15 +149,25 @@ const HeartbeatBars = memo(function HeartbeatBars({ history }: { history: PingRe
 function StatusCell({
   result,
   isUnconfigured,
+  isAdding,
 }: {
   result: HealthCheckResult | undefined;
   isUnconfigured?: boolean;
+  isAdding?: boolean;
 }) {
   if (isUnconfigured) {
     return (
       <div className="flex items-center gap-1.5 text-muted-foreground/50">
         <CircleDashed className="h-4 w-4" />
         <span className="text-xs">No status page</span>
+      </div>
+    );
+  }
+  if (isAdding && !result) {
+    return (
+      <div className="flex items-center gap-1.5 text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        <span className="text-xs">Checking…</span>
       </div>
     );
   }
@@ -282,12 +293,14 @@ const AppRow = memo(function AppRow({
   history,
   onDelete,
   dimmed = false,
+  isAdding = false,
 }: {
   app: RegisteredApp;
   result: HealthCheckResult | undefined;
   history: PingRecord[];
   onDelete: (app: RegisteredApp) => void;
   dimmed?: boolean;
+  isAdding?: boolean;
 }) {
   const pct = uptimePct(history);
   const statusPageUrl = toStatusPageUrl(app.statusUrl);
@@ -318,7 +331,7 @@ const AppRow = memo(function AppRow({
       </TableCell>
       {/* Status */}
       <TableCell>
-        <StatusCell result={result} isUnconfigured={!app.statusUrl} />
+        <StatusCell result={result} isUnconfigured={!app.statusUrl} isAdding={isAdding} />
       </TableCell>
       {/* History — visible from lg */}
       <TableCell className="hidden lg:table-cell">
@@ -391,6 +404,7 @@ export function StatusDashboard() {
     return {};
   });
   const [latestById, setLatestById] = useState<Record<string, HealthCheckResult>>({});
+  const [addingIds, setAddingIds] = useState<Set<string>>(new Set());
   const [isChecking, setIsChecking] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("status");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -573,19 +587,21 @@ export function StatusDashboard() {
   // ── App CRUD ───────────────────────────────────────────────────────────────
   const handleAddApp = (app: RegisteredApp) => {
     setApps((prev) => [app, ...prev]);
-    // Trigger an immediate single-app check for instant feedback (skip if no status URL)
-    if (app.statusUrl) {
-      void fetch("/api/status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apps: [app] }),
+    if (!app.statusUrl) return;
+    setAddingIds((prev) => new Set([...prev, app.id]));
+    void fetch("/api/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apps: [app] }),
+    })
+      .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
+      .then((data) => {
+        if (data?.results?.[0]) applyResults(data.results, latestByIdRef.current);
       })
-        .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
-        .then((data) => {
-          if (data?.results?.[0]) applyResults(data.results, latestByIdRef.current);
-        })
-        .catch(() => undefined);
-    }
+      .catch(() => undefined)
+      .finally(() => {
+        setAddingIds((prev) => { const n = new Set(prev); n.delete(app.id); return n; });
+      });
   };
 
   const handleBulkAddApps = (newApps: RegisteredApp[]) => {
@@ -604,6 +620,8 @@ export function StatusDashboard() {
     });
     const checkableApps = newApps.filter((a) => a.statusUrl);
     if (checkableApps.length > 0) {
+      const ids = checkableApps.map((a) => a.id);
+      setAddingIds((prev) => new Set([...prev, ...ids]));
       void fetch("/api/status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -611,7 +629,10 @@ export function StatusDashboard() {
       })
         .then((r) => (r.ok ? (r.json() as Promise<HealthCheckResponse>) : null))
         .then((data) => { if (data?.results) applyResults(data.results, latestByIdRef.current); })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          setAddingIds((prev) => { const n = new Set(prev); ids.forEach((id) => n.delete(id)); return n; });
+        });
     }
   };
 
@@ -924,6 +945,7 @@ export function StatusDashboard() {
                       result={latestById[app.id]}
                       history={historyById[app.id] ?? []}
                       onDelete={handleRequestDelete}
+                      isAdding={addingIds.has(app.id)}
                     />
                   ))}
 
@@ -967,6 +989,7 @@ export function StatusDashboard() {
                             history={historyById[app.id] ?? []}
                             onDelete={handleRequestDelete}
                             dimmed
+                            isAdding={addingIds.has(app.id)}
                           />
                         ))}
                     </>
