@@ -198,6 +198,9 @@ export function normalizeVendorName(rawVendor: string): string {
   // ── Xblend / Xpand IT (Xray) ────────────────────────────────────────────
   if (l.includes("xblend") || l.includes("xpand it")) return "xblend";
 
+  // ── codefortynine (may appear as "Code Fortynine" with a space) ──────────
+  if (l.includes("codefortynine") || l === "code fortynine") return "codefortynine";
+
   // Strip generic legal suffixes, then lowercase for a stable map key
   return rawVendor
     .replace(/\b(inc\.?|llc\.?|ltd\.?|gmbh|pty\.? ltd\.?|corp\.?|holdco)\b/gi, "")
