@@ -39,8 +39,8 @@ function isStatuspageLike(json: unknown): boolean {
   );
 }
 
-/** Probe one URL — returns the URL only if it serves a recognisable status-page JSON. */
-async function probeUrl(url: string): Promise<string | null> {
+/** Probe one URL — returns the URL + parsed JSON only if it serves a recognisable status-page. */
+async function probeUrl(url: string): Promise<{ url: string; json: unknown } | null> {
   try {
     const res = await fetch(url, {
       cache: "no-store",
@@ -58,10 +58,56 @@ async function probeUrl(url: string): Promise<string | null> {
     // JSON endpoint (error pages, generic APIs) that happens to be reachable.
     const json = await res.json();
     if (!isStatuspageLike(json)) return null;
-    return url;
+    return { url, json };
   } catch {
     return null;
   }
+}
+
+/** Extract the human-readable page name from a statuspage JSON payload. */
+function getPageName(json: unknown): string {
+  if (!json || typeof json !== "object") return "";
+  const j = json as Record<string, unknown>;
+  // Instatus / Statuspage: { page: { name: "…" } }
+  const page = j.page as Record<string, unknown> | undefined;
+  if (typeof page?.name === "string") return page.name;
+  // Hund.io JSON:API: { data: { attributes: { name: "…" } } }
+  const data = j.data as Record<string, unknown> | undefined;
+  const attrs = data?.attributes as Record<string, unknown> | undefined;
+  if (typeof attrs?.name === "string") return attrs.name;
+  return "";
+}
+
+/**
+ * Returns true when the status-page JSON's reported page name is plausibly
+ * the same company as `vendorName`.
+ *
+ * We tokenise the vendor name (4+ char tokens, minus generic legal suffixes)
+ * and require that the majority of those tokens appear in the page name.
+ * This prevents false positives like:
+ *   vendor "Catapult Labs" → slug "catapult" → page.name "Catapult" (wrong company)
+ *   ↳ "labs" token is missing → majority check fails → rejected
+ *
+ * When the page name is absent (some Hund.io pages omit it), we allow the
+ * match so we don't silently drop valid discoveries.
+ */
+function vendorPageNameMatch(vendorName: string, json: unknown): boolean {
+  const pageName = getPageName(json).toLowerCase();
+  if (!pageName) return true; // cannot validate — allow
+
+  const STOP = new Set(["the", "for", "and", "inc", "llc", "ltd", "gmbh", "corp", "software", "apps"]);
+  const tokens = vendorName
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !STOP.has(w));
+
+  if (tokens.length === 0) return true; // nothing to validate
+
+  const matchCount = tokens.filter((t) => pageName.includes(t)).length;
+  // For 1-2 tokens: all must match. For 3+: at least 2 must match.
+  const minMatches = tokens.length >= 3 ? 2 : tokens.length;
+  return matchCount >= minMatches;
 }
 
 // ── Vendor normalisation ─────────────────────────────────────────────────────
@@ -168,10 +214,16 @@ export function normalizeVendorName(rawVendor: string): string {
  * company's status page, not the intended vendor.
  */
 const SLUG_BLOCKLIST = new Set([
+  // Generic English words commonly registered as unrelated domains
   "open", "new", "blue", "red", "first", "data", "app", "apps", "dev",
   "web", "cloud", "labs", "tech", "soft", "corp", "code", "next", "best",
   "pro", "plus", "hub", "net", "core", "one", "now", "good", "real",
   "free", "all", "any", "the", "our", "get", "try", "use",
+  // Additional generic words confirmed to cause false positives
+  "release", "catapult", "azure", "aws", "support", "admin", "portal",
+  "home", "main", "base", "easy", "smart", "fast", "simple", "magic",
+  "super", "quick", "ninja", "rocket", "hero", "boost", "flow", "link",
+  "sync", "dash", "grid", "list", "form", "view", "move", "work",
 ]);
 
 /** Minimum slug length — single-word slugs shorter than this are too generic. */
@@ -244,12 +296,16 @@ export async function discoverStatusUrl(
 
   // Promise.any resolves as soon as the first probe succeeds; if all fail it
   // throws AggregateError which we catch and return null.
+  // Each probe also validates that the page name plausibly matches the vendor —
+  // this prevents generic slugs (e.g. "release") from matching an unrelated
+  // company's status page that happens to be reachable first.
   try {
     return await Promise.any(
       candidates.map(async ({ url, checkType }) => {
-        const found = await probeUrl(url);
-        if (!found) throw new Error("no response");
-        return { statusUrl: found, checkType };
+        const hit = await probeUrl(url);
+        if (!hit) throw new Error("no response");
+        if (!vendorPageNameMatch(vendorName, hit.json)) throw new Error("page name mismatch");
+        return { statusUrl: hit.url, checkType };
       }),
     );
   } catch {
