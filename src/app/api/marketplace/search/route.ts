@@ -120,7 +120,13 @@ function parseAddons(payload: unknown): MarketplaceSearchItem[] {
 async function enrichWithDiscovery(
   items: MarketplaceSearchItem[],
 ): Promise<MarketplaceSearchItem[]> {
-  const uncovered = items.filter((i) => i.statusUrl === "");
+  // Exclude blacklisted vendors — their statusUrl is intentionally "" and must stay that way.
+  // Without this check, blacklisted vendors fall into auto-discovery and get assigned
+  // a random matching URL (e.g. "open source consulting" → slug "open" → status.open.com).
+  const uncovered = items.filter((i) => {
+    if (i.statusUrl !== "") return false;
+    return !VENDOR_BLACKLIST.has(normalizeVendorName(i.vendorName));
+  });
   if (uncovered.length === 0) return items;
 
   // One discovery call per unique normalized vendor name
