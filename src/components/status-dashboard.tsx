@@ -440,6 +440,23 @@ export function StatusDashboard() {
         addToast(appName, prev.status, r.status);
       }
     }
+
+    // Self-healing: persist any auto-discovered URL replacements to localStorage
+    const healed = results.filter((r) => r.updatedStatusUrl);
+    if (healed.length > 0) {
+      setApps((prev) =>
+        prev.map((app) => {
+          const fix = healed.find((r) => r.appId === app.id);
+          if (!fix?.updatedStatusUrl) return app;
+          return {
+            ...app,
+            statusUrl: fix.updatedStatusUrl,
+            checkType: fix.updatedCheckType ?? app.checkType,
+          };
+        }),
+      );
+    }
+
     setLatestById((prev) => ({
       ...prev,
       ...Object.fromEntries(results.map((r) => [r.appId, r])),

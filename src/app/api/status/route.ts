@@ -10,6 +10,7 @@ import type {
   HealthCheckResult,
   RegisteredApp,
 } from "@/types";
+import { discoverStatusUrl, normalizeVendorName } from "@/lib/status-discovery";
 
 const REQUEST_TIMEOUT_MS = 8000;
 
@@ -420,6 +421,30 @@ function extractAnyStatus(
   return { status: "degraded", message: "Unrecognised status page format" };
 }
 
+// ── Self-healing helpers ────────────────────────────────────────────────────
+
+/**
+ * Returns true when the error is a DNS/network failure (the host doesn't exist
+ * or is unreachable) rather than an HTTP-level error (the service is down but
+ * the host resolved fine).
+ *
+ * These error codes signal that the URL itself is stale — the vendor probably
+ * moved their status page — so we should try auto-discovery rather than
+ * reporting a service outage.
+ */
+function isDnsOrConnectionError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes("enotfound") ||       // DNS lookup failed
+    msg.includes("econnrefused") ||    // host refuses connection
+    msg.includes("econnreset") ||      // connection reset mid-way
+    msg.includes("failed to fetch") || // browser-side DNS failure
+    msg.includes("network error") ||
+    msg.includes("getaddrinfo") ||     // Node.js DNS rejection
+    msg.includes("name or service not known")
+  );
+}
+
 // ── Health check ────────────────────────────────────────────────────────────
 
 async function checkAppHealth(app: RegisteredApp): Promise<HealthCheckResult> {
@@ -525,6 +550,35 @@ async function checkAppHealth(app: RegisteredApp): Promise<HealthCheckResult> {
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
+
+    // Self-healing: if the host is unreachable (DNS failure, connection refused),
+    // the stored URL is likely stale — the vendor moved their status page.
+    // Attempt auto-discovery with a 2 s budget per probe, then retry the check
+    // with the new URL so this request still returns a real health result.
+    if (isDnsOrConnectionError(error) && app.checkType === "statuspage_api") {
+      const vendor = normalizeVendorName(app.vendorName);
+      console.warn(`[SELF-HEAL] "${app.appName}" DNS failure — trying auto-discovery for vendor "${vendor}"`);
+      try {
+        const discovered = await discoverStatusUrl(vendor);
+        if (discovered && discovered.statusUrl !== app.statusUrl) {
+          console.info(`[SELF-HEAL] "${app.appName}" found new URL: ${discovered.statusUrl}`);
+          const healedApp: RegisteredApp = {
+            ...app,
+            statusUrl:  discovered.statusUrl,
+            checkType:  discovered.checkType,
+          };
+          const retryResult = await checkAppHealth(healedApp);
+          return {
+            ...retryResult,
+            updatedStatusUrl:  discovered.statusUrl,
+            updatedCheckType:  discovered.checkType,
+          };
+        }
+      } catch {
+        // Discovery failed — fall through to the outage result below.
+      }
+    }
+
     console.error(`[CRITICAL ERROR] "${app.appName}" | ${msg}`);
     return {
       appId:          app.id,

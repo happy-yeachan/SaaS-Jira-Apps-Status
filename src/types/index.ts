@@ -226,6 +226,9 @@ export interface HealthCheckResult {
   checkedAt: string;
   responseTimeMs: number | null;
   message?: string;
+  /** Present when the stored URL was stale and auto-discovery found a replacement. */
+  updatedStatusUrl?: string;
+  updatedCheckType?: CheckType;
 }
 
 export interface HealthCheckResponse {
