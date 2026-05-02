@@ -41,9 +41,11 @@ export const PRODUCT_RULES: Array<{ keywords: string[]; url: string }> = [
   { keywords: ["bitbar"],                            url: "https://status.bitbar.com/api/v2/status.json" },
 
   // ── Tempo Software — acquired products & specific apps ───────────────────
-  { keywords: ["custom charts"],                     url: "https://status.customcharts.tempo.io/api/v2/status.json" },
+  // "custom charts" and "structure" are generic words; require "jira" co-occurrence
+  // so unrelated apps ("Custom Chart Library", "Org Structure Manager") are not matched.
+  { keywords: ["custom charts", "jira"],             url: "https://status.customcharts.tempo.io/api/v2/status.json" },
   { keywords: ["custom jira charts"],                url: "https://status.customcharts.tempo.io/api/v2/status.json" },
-  { keywords: ["structure"],                         url: "https://status.tempo.io/api/v2/status.json" },
+  { keywords: ["structure", "jira"],                 url: "https://status.tempo.io/api/v2/status.json" },
   { keywords: ["alm works"],                         url: "https://status.tempo.io/api/v2/status.json" },
   { keywords: ["timesheets", "tempo"],               url: "https://status.tempo.io/api/v2/status.json" },
   { keywords: ["planner", "tempo"],                  url: "https://status.tempo.io/api/v2/status.json" },
@@ -129,7 +131,8 @@ export const VENDOR_STATUS_MAP: Record<string, string> = {
   // ── Utilities & agile management ──────────────────────────────────────────
   "deviniti":           "https://status.deviniti.com/api/v2/summary.json",
   "refined":            "https://status.refined.com/api/v2/summary.json",
-  "elements":           "https://status.elements-apps.com/api/v2/summary.json",
+  // "elements" removed — duplicate of "valiantys" above, and the short key
+  // "elements" is a substring of many unrelated vendor names ("Data Elements Inc" etc.).
   "deiser":             "https://status.deiser.com/api/v2/summary.json",
   "easy agile":         "https://status.easyagile.com/api/v2/summary.json",
   "aha!":               "https://status.aha.io/api/v2/summary.json",
@@ -153,10 +156,26 @@ export const VENDOR_BLACKLIST = new Set([
 export function lookupVendorStatus(vendorName: string): VendorStatusConfig | null {
   const normalized = vendorName.toLowerCase().trim();
   for (const [key, url] of Object.entries(VENDOR_STATUS_MAP)) {
-    // Never use key.includes(normalized): short substrings like "software" would
-    // incorrectly match "tempo software" and other compound keys.
-    if (key === normalized || normalized.includes(key)) {
-      return { statusUrl: url, checkType: "statuspage_api" };
+    // Exact match — always correct.
+    if (key === normalized) return { statusUrl: url, checkType: "statuspage_api" };
+
+    // Prefix match: the normalized vendor name STARTS WITH the key.
+    // Examples that correctly resolve:
+    //   normalized="tempo software ltd"  key="tempo software" → startsWith ✓
+    //   normalized="lucid software inc"  key="lucid"          → startsWith ✓
+    //   normalized="appfire partner"     key="appfire"        → startsWith ✓
+    //
+    // This is safer than normalized.includes(key), which would match the key
+    // anywhere inside the vendor name — e.g. "Advanced Elements Studio"
+    // would match key "elements", which is wrong.
+    //
+    // A word-boundary check is added so "refined" doesn't accidentally match
+    // "refinedx" (a concatenation without a space after the key).
+    if (normalized.startsWith(key)) {
+      const charAfter = normalized[key.length];
+      if (charAfter === undefined || charAfter === " ") {
+        return { statusUrl: url, checkType: "statuspage_api" };
+      }
     }
   }
   return null;

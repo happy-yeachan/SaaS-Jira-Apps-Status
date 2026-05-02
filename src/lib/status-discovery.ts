@@ -16,7 +16,30 @@ export interface DiscoveredStatus {
   checkType: CheckType;
 }
 
-/** Probe one URL — returns the URL if it serves JSON, null otherwise. */
+/**
+ * Returns true only if the parsed JSON looks like a known status-page format.
+ *
+ * Prevents false positives where an arbitrary JSON endpoint (error pages,
+ * API responses, health checks that happen to return JSON) gets accepted.
+ *
+ * Recognised shapes:
+ *   Atlassian Statuspage — { status: { indicator: string } }
+ *   Instatus             — { page: { status: string } }
+ *   Hund.io / JSON:API   — { data: ..., included: [...] }
+ */
+function isStatuspageLike(json: unknown): boolean {
+  if (!json || typeof json !== "object") return false;
+  const j = json as Record<string, unknown>;
+  const status = j.status as Record<string, unknown> | undefined;
+  const page = j.page as Record<string, unknown> | undefined;
+  return (
+    typeof status?.indicator === "string" ||
+    typeof page?.status === "string" ||
+    (j.data !== undefined && Array.isArray(j.included))
+  );
+}
+
+/** Probe one URL — returns the URL only if it serves a recognisable status-page JSON. */
 async function probeUrl(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, {
@@ -31,6 +54,10 @@ async function probeUrl(url: string): Promise<string | null> {
     if (!res.ok) return null;
     const ct = res.headers.get("content-type") ?? "";
     if (!ct.includes("application/json")) return null;
+    // Validate the payload is actually a status-page response, not an arbitrary
+    // JSON endpoint (error pages, generic APIs) that happens to be reachable.
+    const json = await res.json();
+    if (!isStatuspageLike(json)) return null;
     return url;
   } catch {
     return null;
@@ -136,12 +163,30 @@ export function normalizeVendorName(rawVendor: string): string {
 // ── Slug helpers ─────────────────────────────────────────────────────────────
 
 /**
+ * Common English words that are likely registered as unrelated domains.
+ * Probing status.open.com or open.statuspage.io would hit some random
+ * company's status page, not the intended vendor.
+ */
+const SLUG_BLOCKLIST = new Set([
+  "open", "new", "blue", "red", "first", "data", "app", "apps", "dev",
+  "web", "cloud", "labs", "tech", "soft", "corp", "code", "next", "best",
+  "pro", "plus", "hub", "net", "core", "one", "now", "good", "real",
+  "free", "all", "any", "the", "our", "get", "try", "use",
+]);
+
+/** Minimum slug length — single-word slugs shorter than this are too generic. */
+const MIN_SLUG_LENGTH = 5;
+
+/**
  * Build slug variants from a vendor name.
+ * Slugs that are too short or match common English words are excluded to
+ * prevent auto-discovery from hitting unrelated companies' status pages.
  *
  * Examples
- *   "Tempo Software"  → ["tempo", "temposoftware"]
- *   "Easy Agile"      → ["easy", "easyagile"]
- *   "K15t"            → ["k15t"]
+ *   "Tempo Software"          → ["tempo", "temposoftware"]
+ *   "Easy Agile"              → ["easyagile"]  ("easy" blocked — < 5 chars or blocklist)
+ *   "Open Source Consulting"  → []              ("open" blocked, "opensource..." OK)
+ *   "K15t"                    → []              (< 5 chars)
  */
 function vendorSlugs(vendorName: string): string[] {
   const words = vendorName
@@ -151,7 +196,9 @@ function vendorSlugs(vendorName: string): string[] {
     .filter(Boolean);
   const first = words[0] ?? "";
   const full = words.join("");
-  return [...new Set([first, full].filter(Boolean))];
+  return [...new Set([first, full].filter(Boolean))].filter(
+    (s) => s.length >= MIN_SLUG_LENGTH && !SLUG_BLOCKLIST.has(s),
+  );
 }
 
 /**
