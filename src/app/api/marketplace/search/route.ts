@@ -31,6 +31,33 @@ import { discoverStatusUrl, normalizeVendorName } from "@/lib/status-discovery";
 
 const MARKETPLACE_BASE = "https://marketplace.atlassian.com";
 
+// ── In-memory search cache ────────────────────────────────────────────────────
+// Keyed by "query:limit". TTL 60 s — Marketplace results don't change by the
+// second, and repeated/backspace queries should be instant for the user.
+const searchCache = new Map<string, { items: MarketplaceSearchItem[]; ts: number }>();
+const SEARCH_CACHE_TTL_MS = 60_000;
+const SEARCH_CACHE_MAX = 50;
+
+function getCachedSearch(key: string): MarketplaceSearchItem[] | null {
+  const entry = searchCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > SEARCH_CACHE_TTL_MS) { searchCache.delete(key); return null; }
+  return entry.items;
+}
+
+function setCachedSearch(key: string, items: MarketplaceSearchItem[]): void {
+  if (searchCache.size >= SEARCH_CACHE_MAX) {
+    // Evict the oldest entry
+    let oldestKey = "";
+    let oldestTs = Infinity;
+    for (const [k, v] of searchCache) {
+      if (v.ts < oldestTs) { oldestTs = v.ts; oldestKey = k; }
+    }
+    if (oldestKey) searchCache.delete(oldestKey);
+  }
+  searchCache.set(key, { items, ts: Date.now() });
+}
+
 /**
  * Re-rank items by text similarity BEFORE returning to the client.
  *
@@ -170,8 +197,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ items: [] });
   }
 
-  // ✅ Atlassian Marketplace REST API v2 uses `text=` for full-text search.
-  //    Using `q=` returns partial/no results — this was the root cause of the bug.
+  // Cache hit — skip Atlassian round-trip entirely
+  const cacheKey = `${text}:${limit}`;
+  const cached = getCachedSearch(cacheKey);
+  if (cached) {
+    return NextResponse.json({ items: cached, cached: true });
+  }
+
   const upstream = new URL(`${MARKETPLACE_BASE}/rest/2/addons`);
   upstream.searchParams.set("text", text);
   upstream.searchParams.set("limit", String(limit));
@@ -183,7 +215,6 @@ export async function GET(request: Request) {
         Accept: "application/json",
         "User-Agent": "NextJS-Marketplace-Proxy/1.0",
       },
-      // Never serve a cached response — the user expects live Marketplace data
       cache: "no-store",
     });
 
@@ -197,8 +228,18 @@ export async function GET(request: Request) {
 
     const payload = (await res.json()) as unknown;
     const rawItems = sortByTextRelevance(parseAddons(payload), text);
-    const items = await enrichWithDiscovery(rawItems);
 
+    // Race discovery against a 1.5 s budget. Static-map apps are already fully
+    // enriched; discovery only adds bonus coverage for unknown vendors.
+    // If it takes too long, return static-map results immediately.
+    const items = await Promise.race([
+      enrichWithDiscovery(rawItems),
+      new Promise<MarketplaceSearchItem[]>((resolve) =>
+        setTimeout(() => resolve(rawItems), 1500),
+      ),
+    ]);
+
+    setCachedSearch(cacheKey, items);
     return NextResponse.json({ items });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown upstream error";
