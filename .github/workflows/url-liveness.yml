@@ -1,0 +1,38 @@
+name: URL liveness audit
+
+# Detects when vendor status URLs go dead so the static map doesn't silently rot.
+# Triggers:
+#   • Weekly schedule  — Mondays 03:00 UTC (catches gradual decay)
+#   • PR to main       — when src/types/index.ts or src/lib/status-discovery.ts changes
+#   • Manual dispatch  — for ad-hoc verification
+#
+# Failure mode: any URL that returns non-200, non-JSON, or non-statuspage shape
+# across 3 retries (1.5 s apart) blocks the workflow with a non-zero exit.
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/types/index.ts"
+      - "src/lib/status-discovery.ts"
+      - "scripts/audit-static-urls.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Probe every URL in PRODUCT_RULES + VENDOR_STATUS_MAP
+        run: node --experimental-strip-types scripts/audit-static-urls.ts
