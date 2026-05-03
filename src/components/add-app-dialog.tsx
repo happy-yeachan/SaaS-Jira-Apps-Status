@@ -62,7 +62,7 @@ export function AddAppDialog({
   existingIds = new Set(),
 }: AddAppDialogProps) {
   const [query, setQuery] = useState("");
-  const debouncedQuery = useDebouncedValue(query, 300);
+  const debouncedQuery = useDebouncedValue(query, 400);
   const [results, setResults] = useState<MarketplaceSearchItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);

@@ -231,12 +231,14 @@ export async function GET(request: Request) {
 
     // Race discovery against a 1.5 s budget. Static-map apps are already fully
     // enriched; discovery only adds bonus coverage for unknown vendors.
-    // If it takes too long, return static-map results immediately.
+    // Clear the fallback timer if discovery wins to avoid timer accumulation.
+    let fallbackTimer!: ReturnType<typeof setTimeout>;
+    const fallback = new Promise<MarketplaceSearchItem[]>((resolve) => {
+      fallbackTimer = setTimeout(() => resolve(rawItems), 1500);
+    });
     const items = await Promise.race([
-      enrichWithDiscovery(rawItems),
-      new Promise<MarketplaceSearchItem[]>((resolve) =>
-        setTimeout(() => resolve(rawItems), 1500),
-      ),
+      enrichWithDiscovery(rawItems).finally(() => clearTimeout(fallbackTimer)),
+      fallback,
     ]);
 
     setCachedSearch(cacheKey, items);
