@@ -118,7 +118,11 @@ export const VENDOR_STATUS_MAP: Record<string, string> = {
   "appfire":            "https://appfire-apps.statuspage.io/api/v2/summary.json",
   "tempo software":     "https://status.tempo.io/api/v2/summary.json",
   "adaptavist":         "https://status.connect.adaptavist.com/api/v2/summary.json",
-  "smartbear":          "https://zephyr.status.smartbear.com/api/v2/summary.json",
+  // "smartbear" removed — SmartBear has no unified JSON status API.
+  // status.smartbear.com is a custom HTML dashboard (not Statuspage/Instatus).
+  // All SmartBear products with a status page are caught by PRODUCT_RULES
+  // (zephyr, zephyr-enterprise, zephyr-squad, bitbar). Routing everything else
+  // to the Zephyr page produced false positives for non-Zephyr SmartBear apps.
 
   // ── Atlassian first-party ─────────────────────────────────────────────────
   "atlassian":          "https://status.atlassian.com/api/v2/status.json",
@@ -165,6 +169,10 @@ export const VENDOR_STATUS_MAP: Record<string, string> = {
   "twinit":             "https://twinit.statuspage.io/api/v2/status.json",
   "soldevelo":          "https://soldevelo.statuspage.io/api/v2/status.json",
   "bloompeak":          "https://bloompeak.statuspage.io/api/v2/status.json",
+
+  // ── Reliability audit additions (audit 2026-05-03 v2/v3) ─────────────────
+  "codefortynine":      "https://status.codefortynine.com/api/v2/summary.json",
+  "saasjet":            "https://status.saasjet.com/api/v2/summary.json",
 };
 
 /**
@@ -178,7 +186,8 @@ export const VENDOR_BLACKLIST = new Set([
   "reliex",
   "ease solutions",
   "open source consulting",
-  "decadis",  // status.decadis.com NXDOMAIN; decadis.statuspage.io is private (401)
+  "decadis",   // status.decadis.com NXDOMAIN; decadis.statuspage.io is private (401)
+  "meta-inf",  // no public status page found at any candidate URL (probed 2026-05-03)
 ]);
 
 export function lookupVendorStatus(vendorName: string): VendorStatusConfig | null {
@@ -226,6 +235,9 @@ export interface HealthCheckResult {
   checkedAt: string;
   responseTimeMs: number | null;
   message?: string;
+  /** Present when the stored URL was stale and auto-discovery found a replacement. */
+  updatedStatusUrl?: string;
+  updatedCheckType?: CheckType;
 }
 
 export interface HealthCheckResponse {

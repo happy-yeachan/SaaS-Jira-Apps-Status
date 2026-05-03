@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "audit:urls": "node --experimental-strip-types scripts/audit-static-urls.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.0",
