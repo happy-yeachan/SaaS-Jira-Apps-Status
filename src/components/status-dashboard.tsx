@@ -11,6 +11,7 @@ import {
   CircleDashed,
   Download,
   ExternalLink,
+  HelpCircle,
   LayoutGrid,
   Loader2,
   PlusCircle,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 import { AddAppDialog } from "@/components/add-app-dialog";
 import { AppLogo } from "@/components/app-logo";
+import { OnboardingDialog } from "@/components/onboarding-dialog";
 import { QuickSetupDialog } from "@/components/quick-setup-dialog";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Badge } from "@/components/ui/badge";
@@ -410,9 +412,11 @@ export function StatusDashboard() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [quickSetupOpen, setQuickSetupOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<RegisteredApp | null>(null);
   const [toasts, setToasts] = useState<StatusToast[]>([]);
   const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
+  const [hasShownOnboarding, setHasShownOnboarding] = useState(false);
 
   // Use a ref so async callbacks always read the latest apps value
   const appsRef = useRef(apps);
@@ -591,6 +595,13 @@ export function StatusDashboard() {
   // Initial health check fires after mount so the real table is visible first.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (isMounted) void checkAllStatuses(); }, [isMounted]);
+
+  // Show onboarding guide for first-time users with empty dashboard.
+  useEffect(() => {
+    if (!isMounted || hasShownOnboarding || apps.length > 0) return;
+    setOnboardingOpen(true);
+    setHasShownOnboarding(true);
+  }, [isMounted, hasShownOnboarding, apps.length]);
 
   // Auto-refresh every 5 minutes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -820,6 +831,19 @@ export function StatusDashboard() {
             Add App
           </Button>
           <div className="h-4 w-px bg-border" />
+          <Tooltip>
+            <TooltipTrigger render={<span className="inline-flex" />}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setOnboardingOpen(true)}
+              >
+                <HelpCircle className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">How to use</TooltipContent>
+          </Tooltip>
           <ThemeToggle />
         </div>
       </div>
@@ -1062,6 +1086,11 @@ export function StatusDashboard() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+
+          <OnboardingDialog
+            open={onboardingOpen}
+            onOpenChange={setOnboardingOpen}
+          />
         </>
       )}
     </main>
