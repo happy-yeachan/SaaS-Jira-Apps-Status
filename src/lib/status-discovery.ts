@@ -190,7 +190,9 @@ export function normalizeVendorName(rawVendor: string): string {
   if (l.includes("gitkraken") || l.includes("axosoft")) return "gitkraken";
 
   // ── Exalate (formerly iDalko, rebranded to iGo Software) ────────────────
-  if (l.includes("idalko") || l.includes("igo software") || l === "exalate") return "exalate";
+  // l.startsWith instead of l === because Marketplace vendor name is the long form:
+  // "Exalate: Integrations for Jira, Azure DevOps, Zendesk, Salesforce, …"
+  if (l.includes("idalko") || l.includes("igo software") || l.startsWith("exalate")) return "exalate";
 
   // ── draw.io (Seibert Media / JGraph) ────────────────────────────────────
   if (l.includes("seibert") || l.includes("jgraph")) return "seibert media";

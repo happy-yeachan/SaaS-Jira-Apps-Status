@@ -563,6 +563,28 @@ export function StatusDashboard() {
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Multi-tab sync — re-read localStorage when another tab writes to our keys.
+  // The `storage` event only fires in OTHER tabs/windows, not the current one,
+  // so there is no risk of an update loop with the persist effects above.
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === APPS_KEY && e.newValue !== null) {
+        try {
+          const parsed = JSON.parse(e.newValue) as RegisteredApp[];
+          if (Array.isArray(parsed)) setApps(parsed);
+        } catch { /* ignore corrupt data */ }
+      }
+      if (e.key === HISTORY_KEY && e.newValue !== null) {
+        try {
+          const parsed = JSON.parse(e.newValue) as Record<string, PingRecord[]>;
+          setHistoryById(parsed);
+        } catch { /* ignore corrupt data */ }
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
   // Mark as mounted — flips the isMounted guard so client-specific data renders.
   useEffect(() => { setIsMounted(true); }, []);
 

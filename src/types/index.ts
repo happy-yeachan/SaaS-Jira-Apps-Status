@@ -72,6 +72,11 @@ export const PRODUCT_RULES: Array<{ keywords: string[]; vendor?: string; url: st
   { keywords: ["advanced tables"],   url: "https://appfire-apps.statuspage.io/api/v2/summary.json" },
   { keywords: ["bob swift"],         url: "https://appfire-apps.statuspage.io/api/v2/summary.json" },
 
+  // ── Xpand IT — Xporter has its own statuspage, separate from Xray ────────
+  // Without this rule every Xblend/Xpand IT app falls through to the xblend
+  // vendor key → xray.statuspage.io, which is wrong for Xporter.
+  { keywords: ["xporter"],                          url: "https://xporter.statuspage.io/api/v2/status.json" },
+
   // ── Adaptavist ───────────────────────────────────────────────────────────
   { keywords: ["scriptrunner"],                     url: "https://status.connect.adaptavist.com/api/v2/summary.json" },
 ];
@@ -172,7 +177,12 @@ export const VENDOR_STATUS_MAP: Record<string, string> = {
 
   // ── Reliability audit additions (audit 2026-05-03 v2/v3) ─────────────────
   "codefortynine":      "https://status.codefortynine.com/api/v2/summary.json",
-  "saasjet":            "https://status.saasjet.com/api/v2/summary.json",
+  "saasjet":            "https://status.saasjet.com/api/v2/status.json",
+
+  // ── Reliability audit additions (audit 2026-05-03 v4) ────────────────────
+  "teamlead":           "https://teamlead.statuspage.io/api/v2/status.json",
+  "mindpro":            "https://mindpro.statuspage.io/api/v2/status.json",
+  "cypress":            "https://cypress.statuspage.io/api/v2/status.json",
 };
 
 /**
@@ -210,7 +220,9 @@ export function lookupVendorStatus(vendorName: string): VendorStatusConfig | nul
     // "refinedx" (a concatenation without a space after the key).
     if (normalized.startsWith(key)) {
       const charAfter = normalized[key.length];
-      if (charAfter === undefined || charAfter === " ") {
+      // Accept any non-alphanumeric boundary: space, colon, comma, dash, etc.
+      // e.g. "Exalate: Integrations for Jira…" → charAfter ":" → match ✓
+      if (charAfter === undefined || !/[a-z0-9]/.test(charAfter)) {
         return { statusUrl: url, checkType: "statuspage_api" };
       }
     }
